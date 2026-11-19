@@ -12,6 +12,7 @@ import {
   Send,
   Layers,
   Calculator,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,13 @@ export function PurchasesPage() {
   const [selectedSingleSiteId, setSelectedSingleSiteId] = useState("main-store");
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([emptyLine()]);
+  const [siteGroups, setSiteGroups] = useState<{ id: string; siteId: string; lines: DraftLine[] }[]>([
+    {
+      id: uid("grp"),
+      siteId: data.sites[0]?.id || "main-store",
+      lines: [emptyLine()],
+    },
+  ]);
   const [query, setQuery] = useState("");
 
   // Vendor options
@@ -75,6 +83,54 @@ export function PurchasesPage() {
     [data.sites],
   );
 
+  const effectiveLines: DraftLine[] = useMemo(() => {
+    if (allocation === "single") {
+      return lines.map((l) => ({ ...l, siteId: selectedSingleSiteId }));
+    }
+    return siteGroups.flatMap((g) => g.lines.map((l) => ({ ...l, siteId: g.siteId })));
+  }, [allocation, lines, selectedSingleSiteId, siteGroups]);
+
+  const totalCalculatedAmount = useMemo(() => {
+    return effectiveLines.reduce((acc, l) => {
+      const q = Number(l.qty) || 0;
+      const r = Number(l.rate) || 0;
+      return acc + q * r;
+    }, 0);
+  }, [effectiveLines]);
+
+  const addSiteGroup = () => {
+    const usedSiteIds = new Set(siteGroups.map((g) => g.siteId));
+    const nextSite = siteOptions.find((s) => !usedSiteIds.has(s.value))?.value || data.sites[0]?.id || "main-store";
+    setSiteGroups((prev) => [
+      ...prev,
+      {
+        id: uid("grp"),
+        siteId: nextSite,
+        lines: [emptyLine()],
+      },
+    ]);
+  };
+
+  const removeSiteGroup = (groupId: string) => {
+    if (siteGroups.length <= 1) {
+      toast.info("At least one site is required in multiple sites mode");
+      return;
+    }
+    setSiteGroups((prev) => prev.filter((g) => g.id !== groupId));
+  };
+
+  const updateGroupSite = (groupId: string, newSiteId: string) => {
+    setSiteGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, siteId: newSiteId } : g)),
+    );
+  };
+
+  const updateGroupLines = (groupId: string, newLines: DraftLine[]) => {
+    setSiteGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, lines: newLines } : g)),
+    );
+  };
+
   const resetForm = () => {
     setInvoiceNo("");
     setProformaNo("");
@@ -88,6 +144,13 @@ export function PurchasesPage() {
     setSelectedSingleSiteId("main-store");
     setNotes("");
     setLines([emptyLine()]);
+    setSiteGroups([
+      {
+        id: uid("grp"),
+        siteId: data.sites[0]?.id || "main-store",
+        lines: [emptyLine()],
+      },
+    ]);
   };
 
   // Vendor selection handler: in Indent mode, auto-populate all catalog items mapped to this vendor!
@@ -113,6 +176,16 @@ export function PurchasesPage() {
           siteId: "",
         }));
         setLines(prefilledLines);
+        setSiteGroups((prev) =>
+          prev.map((g, idx) =>
+            idx === 0
+              ? {
+                  ...g,
+                  lines: prefilledLines.map((l) => ({ ...l, key: uid("ln") })),
+                }
+              : g,
+          ),
+        );
         toast.info(`Loaded ${vendorMaterials.length} materials supplied by ${v?.name}`);
       }
     }
@@ -138,9 +211,9 @@ export function PurchasesPage() {
   const siteWiseBreakdown = useMemo(() => {
     const siteMap = new Map<string, { siteName: string; itemCount: number; totalAmount: number; items: { name: string; qty: number; unit: string; amount: number }[] }>();
 
-    for (const l of lines) {
+    for (const l of effectiveLines) {
       if (!l.materialId || Number(l.qty) <= 0) continue;
-      const targetId = allocation === "single" ? selectedSingleSiteId : l.siteId || "main-store";
+      const targetId = l.siteId || "main-store";
       const siteObj = siteOptions.find((s) => s.value === targetId);
       const siteName = siteObj ? siteObj.label : targetId;
       const mat = data.materials.find((m) => m.id === l.materialId);
@@ -167,11 +240,11 @@ export function PurchasesPage() {
       siteId,
       ...data,
     }));
-  }, [lines, allocation, selectedSingleSiteId, siteOptions, data.materials]);
+  }, [effectiveLines, siteOptions, data.materials]);
 
   const save = () => {
     const isIndent = activeTab === "indent";
-    const items = fromDrafts(lines, {
+    const items = fromDrafts(effectiveLines, {
       rate: !isIndent,
       site: allocation === "multi",
     });
@@ -241,13 +314,6 @@ export function PurchasesPage() {
       ),
     );
   }, [data.purchases, query]);
-
-  const totalCalculatedAmount = useMemo(() => {
-    return lines.reduce(
-      (sum, l) => sum + (Number(l.qty) || 0) * (Number(l.rate) || 0),
-      0,
-    );
-  }, [lines]);
 
   return (
     <>
@@ -427,7 +493,7 @@ export function PurchasesPage() {
                 {
                   value: "multi",
                   label: "Option 2: Multiple Sites",
-                  sub: "Combine multiple sites in one order; select site per line item",
+                  sub: "Select a site, add all its materials, then add another site as needed",
                 },
               ]}
             />
@@ -447,28 +513,131 @@ export function PurchasesPage() {
           )}
         </div>
 
-        {/* Line Items Editor with changable units */}
-        <div className="mt-6 border-t pt-4">
-          <div className="mb-3 flex items-center justify-between">
-            <span className="eyebrow">
-              {activeTab === "purchase" ? "Materials Ordered" : "Materials for Indent Enquiry"}
-            </span>
-            {activeTab === "purchase" && (
-              <div className="num text-sm font-bold text-copper whitespace-nowrap">
-                Total Value: {formatINR(totalCalculatedAmount)}
-              </div>
-            )}
-          </div>
+        {/* Materials Section: Single Site vs Grouped Multiple Sites */}
+        {allocation === "single" ? (
+          <div className="mt-6 border-t pt-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="eyebrow">
+                {activeTab === "purchase" ? "Materials Ordered" : "Materials for Indent Enquiry"}
+              </span>
+              {activeTab === "purchase" && (
+                <div className="num text-sm font-bold text-copper whitespace-nowrap">
+                  Total Value: {formatINR(totalCalculatedAmount)}
+                </div>
+              )}
+            </div>
 
-          <LineItemsEditor
-            lines={lines}
-            onChange={setLines}
-            materials={data.materials}
-            mode={activeTab === "purchase" ? "purchase" : "indent"}
-            onMaterialPicked={onMaterialPicked}
-            siteOptions={allocation === "multi" ? siteOptions : undefined}
-          />
-        </div>
+            <LineItemsEditor
+              lines={lines}
+              onChange={setLines}
+              materials={data.materials}
+              mode={activeTab === "purchase" ? "purchase" : "indent"}
+              onMaterialPicked={onMaterialPicked}
+            />
+          </div>
+        ) : (
+          /* Option 2: Multiple Sites — Grouped site by site */
+          <div className="mt-6 border-t pt-4 space-y-6">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <span className="eyebrow">
+                  Multiple Sites Material Breakdown ({siteGroups.length} Site{siteGroups.length > 1 ? "s" : ""})
+                </span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Select a site, add all materials for it, then click "+ Add Another Site" to add more sites.
+                </p>
+              </div>
+              {activeTab === "purchase" && (
+                <div className="num text-sm font-bold text-copper whitespace-nowrap">
+                  Overall Order Total: {formatINR(totalCalculatedAmount)}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-6">
+              {siteGroups.map((group, groupIdx) => {
+                const groupSubtotal = group.lines.reduce((acc, l) => {
+                  return acc + (Number(l.qty) || 0) * (Number(l.rate) || 0);
+                }, 0);
+
+                return (
+                  <div
+                    key={group.id}
+                    className="rounded-lg border-2 border-border bg-card p-4 sm:p-5 shadow-xs transition-all hover:border-copper/40"
+                  >
+                    {/* Site Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 mb-4 bg-muted/40 -mx-4 -mt-4 sm:-mx-5 sm:-mt-5 p-3.5 sm:px-5 rounded-t-lg">
+                      <div className="flex items-center gap-3 flex-1 max-w-md">
+                        <span className="flex size-7 items-center justify-center rounded-full bg-copper text-white font-bold text-xs shrink-0">
+                          {groupIdx + 1}
+                        </span>
+                        <div className="flex-1">
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+                            Target Site / Location
+                          </label>
+                          <SearchSelect
+                            options={siteOptions}
+                            value={group.siteId}
+                            onChange={(val) => updateGroupSite(group.id, val)}
+                            placeholder="Select site for this material batch…"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3">
+                        {activeTab === "purchase" && (
+                          <div className="text-right">
+                            <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                              Site Subtotal
+                            </span>
+                            <span className="num text-xs font-bold text-copper whitespace-nowrap">
+                              {formatINR(groupSubtotal)}
+                            </span>
+                          </div>
+                        )}
+                        {siteGroups.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-destructive hover:bg-destructive/10 text-xs gap-1"
+                            onClick={() => removeSiteGroup(group.id)}
+                            title="Remove this site from the order"
+                          >
+                            <Trash2 className="size-3.5" />
+                            <span className="hidden sm:inline">Remove Site</span>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Material List for this specific site */}
+                    <LineItemsEditor
+                      lines={group.lines}
+                      onChange={(newLines) => updateGroupLines(group.id, newLines)}
+                      materials={data.materials}
+                      mode={activeTab === "purchase" ? "purchase" : "indent"}
+                      onMaterialPicked={onMaterialPicked}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Add Another Site Button */}
+            <div className="flex justify-start">
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                onClick={addSiteGroup}
+                className="gap-2 border-dashed border-2 border-copper/50 hover:border-copper hover:bg-copper-soft text-sm font-bold text-copper"
+              >
+                <Plus className="size-4" />
+                <span>+ Add Another Site to this {activeTab === "purchase" ? "Order" : "Indent"}</span>
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Site-Wise Breakdown Card (for Boss's Budget Decision & Approval) */}
         {siteWiseBreakdown.length > 0 && (

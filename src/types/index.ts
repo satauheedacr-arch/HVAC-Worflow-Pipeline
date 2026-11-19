@@ -95,8 +95,8 @@ export interface Site {
   statusBefore?: ProjectStatus | null;
   notes: string;
   estimatedBoq: LineItem[];
-  // Allow manual direct adjustments per material on the BOQ tracker
-  boqAdjustments?: Record<string, { issued?: number; returned?: number; unit?: string }>;
+  // Allow manual direct adjustments per material on the BOQ tracker (Running BOQ, Issued, Returned, Unit)
+  boqAdjustments?: Record<string, { runningBoq?: number; issued?: number; returned?: number; unit?: string }>;
   createdAt: string;
 }
 

@@ -134,6 +134,7 @@ export interface BoqRow {
   material: Material;
   size?: string;
   estimatedQty: number;
+  runningBoq: number;
   totalIssued: number;
   totalReturned: number;
   netConsumed: number;
@@ -142,11 +143,14 @@ export interface BoqRow {
 
 /**
  * Generates comprehensive BOQ reconciliation table for a site:
- * Estimated BOQ | Total Issued | Total Returned | Net Consumed (Final BOQ) | Unit
+ * Estimated BOQ | Running BOQ | Total Issued | Total Returned | Net Consumed (Final BOQ) | Unit
  */
 export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
   const mats = new Map(data.materials.map((m) => [m.id, m]));
-  const rowsMap = new Map<string, { material: Material; size?: string; est: number; issued: number; ret: number; unit?: string }>();
+  const rowsMap = new Map<
+    string,
+    { material: Material; size?: string; est: number; running?: number; issued: number; ret: number; unit?: string }
+  >();
 
   // 1. Seed with estimated BOQ
   for (const item of site.estimatedBoq) {
@@ -157,6 +161,7 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
       material: m,
       size: item.size,
       est: Number(item.qty) || 0,
+      running: Number(item.qty) || 0,
       issued: 0,
       ret: 0,
       unit: item.unit || m.issueUnit,
@@ -222,6 +227,7 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
     for (const [key, adj] of Object.entries(site.boqAdjustments)) {
       const existing = rowsMap.get(key);
       if (existing) {
+        if (adj.runningBoq !== undefined) existing.running = adj.runningBoq;
         if (adj.issued !== undefined) existing.issued = adj.issued;
         if (adj.returned !== undefined) existing.ret = adj.returned;
         if (adj.unit) existing.unit = adj.unit;
@@ -233,6 +239,7 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
             material: m,
             size: size || undefined,
             est: 0,
+            running: adj.runningBoq ?? 0,
             issued: adj.issued ?? 0,
             ret: adj.returned ?? 0,
             unit: adj.unit || m.issueUnit,
@@ -246,6 +253,7 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
     material: r.material,
     size: r.size,
     estimatedQty: r.est,
+    runningBoq: r.running !== undefined ? r.running : r.est,
     totalIssued: r.issued,
     totalReturned: r.ret,
     netConsumed: r.issued - r.ret,

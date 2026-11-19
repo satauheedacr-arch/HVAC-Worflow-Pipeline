@@ -3,27 +3,57 @@ import type { AppData } from "@/types";
 import { getSampleData, getSeedData } from "./defaults";
 
 const STORAGE_KEY = "hvac_material_pipeline_v2";
+const BACKUP_STORAGE_KEY = "hvac_material_pipeline_v2_backup_safe";
 
 // Cache in memory for instant synchronous access
 let currentData: AppData = loadInitialData();
 const listeners = new Set<() => void>();
+
+function isValidData(parsed: any): parsed is AppData {
+  return (
+    parsed &&
+    typeof parsed === "object" &&
+    Array.isArray(parsed.materials) &&
+    Array.isArray(parsed.sites) &&
+    Array.isArray(parsed.purchases)
+  );
+}
 
 function loadInitialData(): AppData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.materials) && Array.isArray(parsed.sites)) {
+      if (isValidData(parsed)) {
         return parsed;
       }
     }
   } catch (err) {
-    console.error("Failed to load data from localStorage:", err);
+    console.error("Failed to load primary data from localStorage:", err);
   }
+
+  // Fallback 1: Try backup key in localStorage
+  try {
+    const backupRaw = localStorage.getItem(BACKUP_STORAGE_KEY);
+    if (backupRaw) {
+      const backupParsed = JSON.parse(backupRaw);
+      if (isValidData(backupParsed)) {
+        console.warn("Restored data from safety backup key in localStorage");
+        try {
+          localStorage.setItem(STORAGE_KEY, backupRaw);
+        } catch {}
+        return backupParsed;
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load backup data from localStorage:", err);
+  }
+
   // Start with clean seed data (0 dummy sites, 0 dummy purchases, 0 dummy slips)
   const initial = getSeedData();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+    localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(initial));
   } catch {}
   return initial;
 }
@@ -36,7 +66,11 @@ export function updateData(updater: (prev: AppData) => AppData): void {
   try {
     const next = updater(currentData);
     currentData = next;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const serialized = JSON.stringify(next);
+    // Save to primary storage
+    localStorage.setItem(STORAGE_KEY, serialized);
+    // Save redundant backup storage so data is protected against accidental clear
+    localStorage.setItem(BACKUP_STORAGE_KEY, serialized);
     listeners.forEach((listener) => listener());
   } catch (err) {
     console.error("Failed to save data to localStorage:", err);

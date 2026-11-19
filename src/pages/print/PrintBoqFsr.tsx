@@ -156,6 +156,7 @@ export function PrintBoqFsr() {
                 <th className="py-2 px-2 w-28">Item Code</th>
                 <th className="py-2 px-2">Material Description & Specification</th>
                 <th className="py-2 px-2 text-right w-24">Planned BOQ</th>
+                <th className="py-2 px-2 text-right w-24">Running BOQ</th>
                 <th className="py-2 px-2 text-right w-24">Issued</th>
                 <th className="py-2 px-2 text-right w-24">Returned</th>
                 <th className="py-2 px-2 text-right w-28 font-black">Net Consumed</th>
@@ -175,6 +176,9 @@ export function PrintBoqFsr() {
                   </td>
                   <td className="py-2 px-2 text-right num text-zinc-600">
                     {r.estimatedQty > 0 ? formatQty(r.estimatedQty) : "—"}
+                  </td>
+                  <td className="py-2 px-2 text-right num text-zinc-700 font-semibold">
+                    {r.runningBoq > 0 ? formatQty(r.runningBoq) : "—"}
                   </td>
                   <td className="py-2 px-2 text-right num text-zinc-800 font-semibold">
                     {formatQty(r.totalIssued)}

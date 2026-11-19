@@ -107,11 +107,11 @@ export function BoqPage() {
     toast.success("Estimated BOQ updated");
   };
 
-  // In-place editable update handler for Total Issued / Total Returned / Unit
+  // In-place editable update handler for Running BOQ / Total Issued / Total Returned / Unit
   const updateTrackerCell = (
     materialId: string,
     size: string | undefined,
-    field: "issued" | "returned" | "unit",
+    field: "runningBoq" | "issued" | "returned" | "unit",
     val: string,
   ) => {
     if (!site) return;
@@ -122,10 +122,12 @@ export function BoqPage() {
       sites: d.sites.map((s) => {
         if (s.id !== site.id) return s;
         const curAdjs = s.boqAdjustments || {};
-        const curRecord = curAdjs[key] || {};
+        const curRecord = { ...(curAdjs[key] || {}) };
 
         if (field === "unit") {
           curRecord.unit = val.trim();
+        } else if (field === "runningBoq") {
+          curRecord.runningBoq = Number(val) || 0;
         } else if (field === "issued") {
           curRecord.issued = Number(val) || 0;
         } else if (field === "returned") {
@@ -141,7 +143,7 @@ export function BoqPage() {
         };
       }),
     }));
-    toast.success(`Updated ${field}`);
+    toast.success(`Updated ${field === "runningBoq" ? "Running BOQ" : field}`);
   };
 
   // Add material to tracker
@@ -415,6 +417,9 @@ export function BoqPage() {
                       <th className="px-4 py-3 whitespace-nowrap">Material Code</th>
                       <th className="px-4 py-3">Material Name & Specification</th>
                       <th className="px-4 py-3 text-right whitespace-nowrap">Estimated BOQ</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap text-amber-800 bg-amber-50/60">
+                        Running BOQ
+                      </th>
                       <th className="px-4 py-3 text-right whitespace-nowrap text-blue-700 bg-blue-50/50">
                         Total Issued
                       </th>
@@ -456,6 +461,22 @@ export function BoqPage() {
                             }}
                             className="num h-7 w-20 rounded border border-input bg-card px-2 text-right text-xs font-semibold outline-none focus:ring-2 focus:ring-copper"
                             title="Directly edit estimated planned quantity"
+                          />
+                        </td>
+
+                        {/* Editable Running BOQ */}
+                        <td className="px-4 py-3.5 text-right whitespace-nowrap bg-amber-50/30">
+                          <input
+                            type="number"
+                            defaultValue={r.runningBoq}
+                            key={`run-${r.material.id}-${r.size || ""}-${r.runningBoq}`}
+                            onBlur={(e) => {
+                              if (e.target.value !== String(r.runningBoq)) {
+                                updateTrackerCell(r.material.id, r.size, "runningBoq", e.target.value);
+                              }
+                            }}
+                            className="num h-7 w-20 rounded border border-amber-300 bg-white px-2 text-right text-xs font-bold text-amber-800 outline-none focus:ring-2 focus:ring-amber-500"
+                            title="Directly edit running BOQ quantity"
                           />
                         </td>
 
