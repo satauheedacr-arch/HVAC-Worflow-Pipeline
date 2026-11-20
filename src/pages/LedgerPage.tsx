@@ -236,8 +236,8 @@ export function LedgerPage() {
                             {isIssue ? "Issue" : "Return"}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 whitespace-nowrap">
-                          <span className="num font-bold text-copper whitespace-nowrap inline-block">{s.slipNo}</span>
+                        <td className="px-4 py-3.5 whitespace-nowrap min-w-[110px]">
+                          <span className="num font-bold text-copper whitespace-nowrap inline-block px-1.5 py-0.5 rounded bg-copper-soft/40 border border-copper/30">{s.slipNo}</span>
                         </td>
                         <td className="px-4 py-3.5 text-muted-foreground whitespace-nowrap">
                           {formatDate(s.date)}
@@ -271,15 +271,14 @@ export function LedgerPage() {
                         </td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
-                            <Button asChild variant="outline" size="sm" className="h-7 text-xs gap-1">
-                              <Link
-                                to={isIssue ? `/print/issue/${s.id}` : `/print/return/${s.id}`}
-                                target="_blank"
-                              >
-                                <Printer className="size-3 text-copper" />
-                                <span>Print</span>
-                              </Link>
-                            </Button>
+                            {isIssue && (
+                              <Button asChild variant="outline" size="sm" className="h-7 text-xs gap-1">
+                                <Link to={`/print/issue/${s.id}`} target="_blank">
+                                  <Printer className="size-3 text-copper" />
+                                  <span>Print Gate Pass</span>
+                                </Link>
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"

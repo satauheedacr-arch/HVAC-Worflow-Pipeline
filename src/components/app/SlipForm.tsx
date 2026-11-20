@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, Printer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, Printer, X, Plus, Minus, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useData, updateData } from "@/lib/store";
 import { atSiteQty, storeStock } from "@/lib/calc";
-import { nextNumber, todayISO, uid } from "@/lib/format";
-import { ISSUE_STATUSES, type IssueSlip, type IssueStatus, type ReturnSlip } from "@/types";
+import { nextNumber, todayISO, uid, formatQty } from "@/lib/format";
+import type { IssueSlip, IssueStatus, ReturnSlip, LineItem } from "@/types";
 import { cn } from "@/lib/utils";
 import { Field, SegmentedControl } from "./ui-bits";
 import { SearchSelect } from "./SearchSelect";
@@ -27,31 +27,91 @@ export function SlipForm({ kind, editing, onDone }: Props) {
   const isIssue = kind === "issue";
   const [siteId, setSiteId] = useState(editing?.siteId ?? "");
   const [technician, setTechnician] = useState(editing?.technician ?? "");
+  // Issue status: Only "Dispatched" or "In Progress" (NO "Completed" during issue!)
   const [status, setStatus] = useState<IssueStatus>(
-    (editing as IssueSlip | undefined)?.status ?? "In Progress",
+    (editing as IssueSlip | undefined)?.status === "Dispatched" ? "Dispatched" : "In Progress",
   );
   const [date, setDate] = useState(editing?.date ?? todayISO());
   const [remarks, setRemarks] = useState(editing?.remarks ?? "");
+
+  // For Issue mode: standard line items editor
   const [lines, setLines] = useState<DraftLine[]>(
     editing ? editing.items.map(toDraft) : [emptyLine()],
   );
+
+  // For Return mode: site-issued materials map { materialId: returnQty }
+  const [returnMap, setReturnMap] = useState<Record<string, number>>({});
+
   const [saved, setSaved] = useState<{ id: string; slipNo: string } | null>(null);
 
   const site = data.sites.find((s) => s.id === siteId);
 
-  // Live stock for this form. When editing, add back this slip's own quantities.
-  const stock = useMemo(() => {
-    const base = isIssue ? storeStock(data) : siteId ? atSiteQty(data, siteId) : new Map<string, number>();
-    if (editing && (isIssue || editing.siteId === siteId)) {
-      for (const l of editing.items) {
-        base.set(l.materialId, (base.get(l.materialId) ?? 0) + l.qty);
+  // Live stock in ACR Office
+  const currentStoreStock = useMemo(() => storeStock(data), [data]);
+
+  // When editing an issue, add back this slip's own quantities to store stock
+  const effectiveStoreStock = useMemo(() => {
+    const s = new Map(currentStoreStock);
+    if (editing && isIssue) {
+      for (const it of editing.items) {
+        s.set(it.materialId, (s.get(it.materialId) ?? 0) + Number(it.qty || 0));
       }
     }
-    return base;
-  }, [data, isIssue, siteId, editing]);
+    return s;
+  }, [currentStoreStock, editing, isIssue]);
+
+  // Materials currently present at the selected site (for Return mode)
+  const siteMaterials = useMemo(() => {
+    if (!siteId) return [];
+    const atSite = atSiteQty(data, siteId);
+    // If editing a return slip, add back this slip's returned quantities so they can be re-adjusted
+    if (editing && !isIssue && editing.siteId === siteId) {
+      for (const it of editing.items) {
+        atSite.set(it.materialId, (atSite.get(it.materialId) ?? 0) + Number(it.qty || 0));
+      }
+    }
+
+    const list: { materialId: string; name: string; code: string; unit: string; qtyAtSite: number }[] = [];
+    for (const [matId, qty] of atSite.entries()) {
+      if (qty > 0) {
+        const m = data.materials.find((x) => x.id === matId);
+        list.push({
+          materialId: matId,
+          name: m?.name || matId,
+          code: m?.code || "—",
+          unit: m?.issueUnit || "Nos",
+          qtyAtSite: qty,
+        });
+      }
+    }
+    return list;
+  }, [data, siteId, editing, isIssue]);
+
+  // Initialize return map when site or editing changes
+  useEffect(() => {
+    if (!isIssue && siteId) {
+      if (editing && editing.siteId === siteId) {
+        const initial: Record<string, number> = {};
+        for (const it of editing.items) {
+          initial[it.materialId] = Number(it.qty || 0);
+        }
+        setReturnMap(initial);
+      } else {
+        setReturnMap({});
+      }
+    }
+  }, [isIssue, siteId, editing]);
+
+  const setReturnItemQty = (matId: string, val: number, maxQty: number) => {
+    const clamped = Math.max(0, Math.min(val, maxQty));
+    setReturnMap((prev) => ({
+      ...prev,
+      [matId]: clamped,
+    }));
+  };
 
   const siteOptions = data.sites
-    .filter((s) => s.status !== "Tax Invoiced" || s.id === siteId)
+    .filter((s) => s.status !== "Payment Received / Closed" || s.id === siteId)
     .map((s) => ({
       value: s.id,
       label: s.clientName,
@@ -81,21 +141,48 @@ export function SlipForm({ kind, editing, onDone }: Props) {
     setDate(todayISO());
     setRemarks("");
     setLines([emptyLine()]);
+    setReturnMap({});
   };
 
   const save = () => {
-    const items = fromDrafts(lines);
     if (!siteId) return void toast.error("Please select a target site");
     if (!technician) return void toast.error("Please select the technician");
-    if (!items.length) return void toast.error("Add at least one item with valid quantity");
 
-    const totals = requestedTotals(lines);
-    const short = [...totals].filter(([id, q]) => q > (stock.get(id) ?? 0));
-    if (short.length) {
-      const msg = isIssue
-        ? `${short.length} item(s) exceed current Main Store stock. Stock will go negative. Proceed and save?`
-        : `${short.length} item(s) exceed quantity currently recorded at this site. Save anyway?`;
-      if (!window.confirm(msg)) return;
+    let items: LineItem[] = [];
+
+    if (isIssue) {
+      items = fromDrafts(lines);
+      if (!items.length) return void toast.error("Add at least one item with valid quantity");
+
+      // ZERO STOCK VALIDATION: Do not allow issuing if stock is 0 or requested exceeds stock
+      for (const item of items) {
+        const available = effectiveStoreStock.get(item.materialId) ?? 0;
+        const mat = data.materials.find((m) => m.id === item.materialId);
+        const name = mat?.name || item.materialId;
+
+        if (available <= 0) {
+          toast.error(`Cannot issue "${name}": Available stock in ACR Office is 0.`);
+          return;
+        }
+        if (item.qty > available) {
+          toast.error(`Cannot issue ${item.qty} of "${name}": Only ${formatQty(available)} available in ACR Office.`);
+          return;
+        }
+      }
+    } else {
+      // Return mode: take items from returnMap
+      for (const [matId, qty] of Object.entries(returnMap)) {
+        if (qty > 0) {
+          items.push({
+            materialId: matId,
+            qty,
+          });
+        }
+      }
+      if (!items.length) {
+        toast.error("Please set a return quantity greater than 0 for at least one material.");
+        return;
+      }
     }
 
     const id = editing?.id ?? uid(isIssue ? "is" : "re");
@@ -112,7 +199,7 @@ export function SlipForm({ kind, editing, onDone }: Props) {
           technician,
           status,
           items,
-          remarks,
+          remarks: "",
         };
         return {
           ...d,
@@ -127,7 +214,7 @@ export function SlipForm({ kind, editing, onDone }: Props) {
           siteId,
           technician,
           items,
-          remarks,
+          remarks: remarks.trim(),
         };
         return {
           ...d,
@@ -156,16 +243,18 @@ export function SlipForm({ kind, editing, onDone }: Props) {
           </div>
           <p className="text-sm text-muted-foreground mt-1 max-w-md">
             {isIssue
-              ? "Main Store inventory has been deducted, and site inventory updated."
-              : "Unused items have been credited back into Main Store stock."}
+              ? "ACR Office inventory has been deducted, and site inventory updated."
+              : "Unused items have been credited back into ACR Office stock."}
           </p>
         </div>
         <div className="flex flex-wrap justify-center gap-3 mt-2">
-          <Button asChild variant="copper" size="lg">
-            <Link to={isIssue ? `/print/issue/${saved.id}` : `/print/return/${saved.id}`} target="_blank">
-              <Printer className="size-4" /> {isIssue ? "Print Gate Pass / Challan" : "Print Return Receipt"}
-            </Link>
-          </Button>
+          {isIssue && (
+            <Button asChild variant="copper" size="lg">
+              <Link to={`/print/issue/${saved.id}`} target="_blank">
+                <Printer className="size-4" /> Print Gate Pass / Challan
+              </Link>
+            </Button>
+          )}
           <Button variant="outline" size="lg" onClick={() => setSaved(null)}>
             {isIssue ? <ArrowUpFromLine className="size-4" /> : <ArrowDownToLine className="size-4" />}{" "}
             Log Another {isIssue ? "Issue" : "Return"}
@@ -184,12 +273,12 @@ export function SlipForm({ kind, editing, onDone }: Props) {
               ? `Edit ${editing.slipNo}`
               : isIssue
                 ? "Issue Material to Site (Gate Pass)"
-                : "Log Material Return from Site"}
+                : "Log Surplus Material Return from Site"}
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {isIssue
-              ? "Generates an official delivery challan and reduces store stock."
-              : "Reclaims unused or surplus material back to store stock."}
+              ? "Generates an official delivery challan and reduces ACR Office stock."
+              : "Select a site to view only materials issued to it, then adjust quantities returned."}
           </p>
         </div>
         {editing && onDone && (
@@ -205,8 +294,8 @@ export function SlipForm({ kind, editing, onDone }: Props) {
             options={siteOptions}
             value={siteId}
             onChange={pickSite}
-            placeholder="Select destination site"
-            emptyText="No active sites. Add one in Clients & Sites."
+            placeholder="Select project site"
+            emptyText="No active sites found."
           />
         </Field>
 
@@ -230,57 +319,167 @@ export function SlipForm({ kind, editing, onDone }: Props) {
         </Field>
       </div>
 
+      {/* For Issue: Work status options: ONLY In Progress or Dispatched (NO Completed) */}
       {isIssue && (
-        <div className="mt-4 max-w-xl">
-          <Field label="3 · Work Progress at Site">
+        <div className="mt-4 max-w-md">
+          <Field label="3 · Work Dispatch Status at Site">
             <SegmentedControl
               value={status}
               onChange={setStatus}
-              options={ISSUE_STATUSES.map((t) => ({
-                value: t,
-                label: t,
-                sub: t === "Completed" ? "Work finished at site" : "Work still ongoing",
-              }))}
+              options={[
+                {
+                  value: "In Progress",
+                  label: "In Progress",
+                  sub: "Technician on site / active work",
+                },
+                {
+                  value: "Dispatched",
+                  label: "Dispatched",
+                  sub: "Material dispatched with team",
+                },
+              ]}
             />
           </Field>
         </div>
       )}
 
+      {/* Material Section */}
       <div className="mt-6 border-t pt-4">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <span className="eyebrow">{isIssue ? "4 · Items to Issue" : "3 · Unused Items Returned"}</span>
-          <span className="text-xs text-muted-foreground">
-            {isIssue
-              ? "Green badge shows live Main Store availability."
-              : siteId
-                ? "Green badge shows material quantity currently present at this site."
-                : "Select a site above to view at-site inventory."}
-          </span>
-        </div>
+        {isIssue ? (
+          <>
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <span className="eyebrow">4 · Items to Issue</span>
+              <span className="text-xs text-muted-foreground">
+                Green badge shows live available stock in ACR Office. Items with zero stock cannot be issued.
+              </span>
+            </div>
 
-        <LineItemsEditor
-          lines={lines}
-          onChange={setLines}
-          materials={data.materials}
-          mode={kind}
-          stock={isIssue || siteId ? stock : undefined}
-          stockLabel={isIssue ? "Store" : "At site"}
-        />
+            <LineItemsEditor
+              lines={lines}
+              onChange={setLines}
+              materials={data.materials}
+              mode="issue"
+              stock={effectiveStoreStock}
+              stockLabel="ACR Office"
+            />
+          </>
+        ) : (
+          /* Return Mode: ONLY show materials that have been issued to this specific site */
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <span className="eyebrow">3 · Materials Issued to this Site</span>
+              <span className="text-xs text-muted-foreground">
+                Only items previously issued to this site are displayed. Adjust return quantity via + / - or direct input.
+              </span>
+            </div>
+
+            {!siteId ? (
+              <div className="rounded-lg border border-dashed p-8 text-center text-xs text-muted-foreground">
+                Please select a target site above to load its issued materials.
+              </div>
+            ) : siteMaterials.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-8 text-center text-xs text-muted-foreground">
+                No materials are currently recorded at this site. Either no issues were logged yet or all materials were already returned.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b bg-muted/40 font-bold text-muted-foreground uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="px-4 py-3">Material Code</th>
+                      <th className="px-4 py-3">Material Name</th>
+                      <th className="px-4 py-3 text-right">Currently at Site</th>
+                      <th className="px-4 py-3 text-center w-48">Return Quantity</th>
+                      <th className="px-4 py-3">Unit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {siteMaterials.map((m) => {
+                      const qty = returnMap[m.materialId] ?? 0;
+                      return (
+                        <tr key={m.materialId} className="hover:bg-muted/20">
+                          <td className="px-4 py-3 font-bold num text-copper whitespace-nowrap">{m.code}</td>
+                          <td className="px-4 py-3 font-semibold text-foreground">{m.name}</td>
+                          <td className="px-4 py-3 text-right num font-bold text-foreground">
+                            {formatQty(m.qtyAtSite)} {m.unit}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="size-7"
+                                onClick={() => setReturnItemQty(m.materialId, qty - 1, m.qtyAtSite)}
+                                disabled={qty <= 0}
+                              >
+                                <Minus className="size-3" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={m.qtyAtSite}
+                                value={qty === 0 ? "" : qty}
+                                placeholder="0"
+                                onChange={(e) =>
+                                  setReturnItemQty(m.materialId, Number(e.target.value) || 0, m.qtyAtSite)
+                                }
+                                className="h-8 w-20 text-center font-bold text-emerald-700"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="size-7"
+                                onClick={() => setReturnItemQty(m.materialId, qty + 1, m.qtyAtSite)}
+                                disabled={qty >= m.qtyAtSite}
+                              >
+                                <Plus className="size-3" />
+                              </Button>
+                              <button
+                                type="button"
+                                onClick={() => setReturnItemQty(m.materialId, m.qtyAtSite, m.qtyAtSite)}
+                                className="text-[10px] text-copper hover:underline font-bold ml-1"
+                              >
+                                All
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">{m.unit}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="mt-6 grid gap-4 border-t pt-4 md:grid-cols-[1fr_auto] md:items-end">
-        <Field label={isIssue ? "Issue Related Notes / Reference" : "Return Condition & Remarks"}>
-          <Textarea
-            rows={2}
-            value={remarks}
-            onChange={(e) => setRemarks(e.target.value)}
-            placeholder={isIssue ? "e.g. Copper piping lot-1, emergency shortage, additional flare nuts..." : "e.g. Uncut coils, leftover elbows returned undamaged..."}
-          />
-        </Field>
+      {/* Footer Actions */}
+      <div className="mt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t pt-4">
+        {/* Only return mode has remarks; Issue Related Notes was removed per user request */}
+        {!isIssue ? (
+          <div className="flex-1 max-w-md">
+            <Field label="Return Condition & Remarks">
+              <Input
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="e.g. Uncut coils, leftover elbows returned undamaged..."
+                className="h-10"
+              />
+            </Field>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">
+            Make sure technician has verified all materials before dispatch.
+          </div>
+        )}
 
-        <Button variant="copper" size="lg" onClick={save} className="h-11">
+        <Button variant="copper" size="lg" onClick={save} className="h-11 font-bold gap-1.5 shrink-0">
           {isIssue ? <ArrowUpFromLine className="size-4" /> : <ArrowDownToLine className="size-4" />}
-          {editing ? "Save Changes" : isIssue ? "Issue Material & Generate Challan" : "Record Return to Store"}
+          {editing ? "Save Changes" : isIssue ? "Issue Material & Generate Challan" : "Record Return to ACR Office"}
         </Button>
       </div>
     </section>

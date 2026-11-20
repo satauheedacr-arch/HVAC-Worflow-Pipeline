@@ -1,5 +1,8 @@
 import { useParams, Link } from "react-router-dom";
-import { Printer, ArrowLeft, Snowflake } from "lucide-react";
+import { useState } from "react";
+import { Printer, ArrowLeft, Snowflake, Copy, FileSpreadsheet, Check } from "lucide-react";
+import { toast } from "sonner";
+import * as XLSX from "xlsx";
 import { useData } from "@/lib/store";
 import { formatDate, formatQty, formatINR } from "@/lib/format";
 import { lineValue } from "@/lib/calc";
@@ -8,6 +11,7 @@ import { Button } from "@/components/ui/button";
 export function PrintPurchase() {
   const { id } = useParams<{ id: string }>();
   const data = useData();
+  const [copied, setCopied] = useState(false);
 
   const purchase = data.purchases.find((p) => p.id === id);
   const vendor = purchase ? data.vendors.find((v) => v.id === purchase.vendorId) : undefined;
@@ -18,9 +22,9 @@ export function PrintPurchase() {
   if (!purchase) {
     return (
       <div className="p-8 text-center">
-        <p className="text-red-600 font-semibold">Purchase record not found.</p>
+        <p className="text-red-600 font-semibold">Indent / Purchase record not found.</p>
         <Button asChild variant="outline" className="mt-4">
-          <Link to="/purchases">Back to Purchases</Link>
+          <Link to="/purchases">Back to Indents</Link>
         </Button>
       </div>
     );
@@ -29,21 +33,94 @@ export function PrintPurchase() {
   const isIndent = purchase.isIndent;
   const totalVal = lineValue(purchase.items);
 
+  // Copy table to clipboard in tab-separated format for direct Excel paste
+  const copyToExcelClipboard = () => {
+    const headers = [
+      "Sl No",
+      "Item Code",
+      "Material Name",
+      "Specification",
+      purchase.allocation === "multi" ? "Target Site" : null,
+      "Quantity",
+      "Unit",
+    ].filter(Boolean);
+
+    const rows = purchase.items.map((item, idx) => {
+      const m = matsMap.get(item.materialId);
+      const targetSite = item.siteId ? sitesMap.get(item.siteId)?.clientName || item.siteId : "ACR Office";
+      return [
+        idx + 1,
+        m?.code || item.materialId,
+        m?.name || item.materialId,
+        item.size ? `Size: ${item.size}` : m?.spec || "",
+        purchase.allocation === "multi" ? targetSite : null,
+        item.qty,
+        item.unit || m?.purchaseUnit || "Nos",
+      ].filter((x) => x !== null);
+    });
+
+    const tsv = [headers.join("\t"), ...rows.map((r) => r.join("\t"))].join("\n");
+    navigator.clipboard.writeText(tsv);
+    setCopied(true);
+    toast.success("Table copied! Open Excel and press Ctrl+V to paste.");
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  // Export as .xlsx file
+  const exportIndentExcel = () => {
+    const rows = purchase.items.map((item, idx) => {
+      const m = matsMap.get(item.materialId);
+      const targetSite = item.siteId ? sitesMap.get(item.siteId)?.clientName || item.siteId : "ACR Office";
+      return {
+        "Sl No": idx + 1,
+        "Item Code": m?.code || item.materialId,
+        "Material Name": m?.name || item.materialId,
+        Specification: item.size ? `Size: ${item.size}` : m?.spec || "",
+        ...(purchase.allocation === "multi" ? { "Target Site": targetSite } : {}),
+        Quantity: item.qty,
+        Unit: item.unit || m?.purchaseUnit || "Nos",
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Material Indent");
+    XLSX.writeFile(wb, `Indent_${purchase.entryNo}_${purchase.vendorName.replace(/\s+/g, "_")}.xlsx`);
+    toast.success("Excel file downloaded!");
+  };
+
   return (
     <div className="min-h-screen bg-zinc-100 p-4 sm:p-8 print:bg-white print:p-0">
-      {/* Top Floating Bar */}
-      <div className="no-print mx-auto max-w-4xl mb-6 flex items-center justify-between rounded-lg bg-card p-4 border shadow-sm">
+      {/* Top Action Bar */}
+      <div className="no-print mx-auto max-w-4xl mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg bg-card p-4 border shadow-sm">
         <Button asChild variant="ghost" size="sm">
           <Link to="/purchases">
-            <ArrowLeft className="size-4 mr-1" /> Back to Purchases
+            <ArrowLeft className="size-4 mr-1" /> Back to Indents
           </Link>
         </Button>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-2">
-            A4 {isIndent ? "Vendor Indent" : purchase.docType} Preview
-          </span>
-          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5">
-            <Printer className="size-4" /> Print Document
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyToExcelClipboard}
+            className="gap-1.5 text-xs font-semibold"
+          >
+            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-copper" />}
+            <span>{copied ? "Copied for Excel!" : "Copy Table to Excel"}</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportIndentExcel}
+            className="gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+          >
+            <FileSpreadsheet className="size-3.5 text-emerald-600" />
+            <span>Export Excel (.xlsx)</span>
+          </Button>
+
+          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5 text-xs font-bold">
+            <Printer className="size-4" /> Print / Save PDF
           </Button>
         </div>
       </div>
@@ -126,7 +203,7 @@ export function PrintPurchase() {
                   ? "Multiple Project Sites (Split Inward)"
                   : site
                     ? `Direct to Site: ${site.clientName}`
-                    : "Main Central Warehouse / Store"}
+                    : "ACR Office"}
               </span>
             </div>
             {purchase.invoiceNo && (
@@ -172,7 +249,7 @@ export function PrintPurchase() {
             <tbody className="divide-y divide-zinc-200">
               {purchase.items.map((item, index) => {
                 const m = matsMap.get(item.materialId);
-                const targetSite = item.siteId ? sitesMap.get(item.siteId)?.clientName : "Main Store";
+                const targetSite = item.siteId ? sitesMap.get(item.siteId)?.clientName : "ACR Office";
 
                 return (
                   <tr key={index} className="leading-tight">

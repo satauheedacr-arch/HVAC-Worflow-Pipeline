@@ -2,58 +2,54 @@ import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   PackagePlus,
-  ShoppingCart,
-  FileText,
   Printer,
   Trash2,
   Search,
   Building2,
-  Warehouse,
   Send,
   Layers,
   Calculator,
   Plus,
+  Receipt,
+  RotateCcw,
+  Sparkles,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useData, updateData } from "@/lib/store";
-import type { Purchase, PurchaseDocType } from "@/types";
-import { PURCHASE_DOC_TYPES } from "@/types";
+import type { Purchase } from "@/types";
 import { formatINR, formatQty, formatDate, todayISO, nextNumber, uid, matchesQuery } from "@/lib/format";
 import { lineValue } from "@/lib/calc";
-import { PageHeader, Field, SegmentedControl, EmptyState } from "@/components/app/ui-bits";
+import { PageHeader, Field, SegmentedControl } from "@/components/app/ui-bits";
 import { SearchSelect } from "@/components/app/SearchSelect";
-import { LineItemsEditor, emptyLine, fromDrafts, toDraft, type DraftLine } from "@/components/app/LineItemsEditor";
-import { cn } from "@/lib/utils";
-
-type Mode = "purchase" | "indent";
+import { LineItemsEditor, emptyLine, fromDrafts, type DraftLine } from "@/components/app/LineItemsEditor";
 
 export function PurchasesPage() {
   const data = useData();
-  const [activeTab, setActiveTab] = useState<Mode>("purchase");
-  const [docType, setDocType] = useState<PurchaseDocType>("Purchase Order");
-  const [invoiceNo, setInvoiceNo] = useState("");
-  const [proformaNo, setProformaNo] = useState("");
-  const [poNo, setPoNo] = useState("");
   const [date, setDate] = useState(todayISO());
   const [vendorId, setVendorId] = useState("");
   const [vendorName, setVendorName] = useState("");
   const [vendorAddress, setVendorAddress] = useState("");
   const [vendorPhone, setVendorPhone] = useState("");
   const [allocation, setAllocation] = useState<"single" | "multi">("single");
-  const [selectedSingleSiteId, setSelectedSingleSiteId] = useState("main-store");
-  const [notes, setNotes] = useState("");
+  const [selectedSingleSiteId, setSelectedSingleSiteId] = useState("acr-office");
   const [lines, setLines] = useState<DraftLine[]>([emptyLine()]);
   const [siteGroups, setSiteGroups] = useState<{ id: string; siteId: string; lines: DraftLine[] }[]>([
     {
       id: uid("grp"),
-      siteId: data.sites[0]?.id || "main-store",
+      siteId: data.sites[0]?.id || "acr-office",
       lines: [emptyLine()],
     },
   ]);
   const [query, setQuery] = useState("");
+
+  // Invoice Recording Modal state
+  const [invoiceModalPurchase, setInvoiceModalPurchase] = useState<Purchase | null>(null);
+  const [recordInvNo, setRecordInvNo] = useState("");
+  const [recordInvDate, setRecordInvDate] = useState(todayISO());
 
   // Vendor options
   const vendorOptions = useMemo(
@@ -66,13 +62,13 @@ export function PurchasesPage() {
     [data.vendors],
   );
 
-  // Available sites including Main Central Store
+  // Available sites including ACR Office
   const siteOptions = useMemo(
     () => [
       {
-        value: "main-store",
-        label: "Main Central Store / Central Warehouse",
-        hint: "Central stock",
+        value: "acr-office",
+        label: "ACR Office",
+        hint: "Central storage & office stock",
       },
       ...data.sites.map((s) => ({
         value: s.id,
@@ -90,17 +86,9 @@ export function PurchasesPage() {
     return siteGroups.flatMap((g) => g.lines.map((l) => ({ ...l, siteId: g.siteId })));
   }, [allocation, lines, selectedSingleSiteId, siteGroups]);
 
-  const totalCalculatedAmount = useMemo(() => {
-    return effectiveLines.reduce((acc, l) => {
-      const q = Number(l.qty) || 0;
-      const r = Number(l.rate) || 0;
-      return acc + q * r;
-    }, 0);
-  }, [effectiveLines]);
-
   const addSiteGroup = () => {
     const usedSiteIds = new Set(siteGroups.map((g) => g.siteId));
-    const nextSite = siteOptions.find((s) => !usedSiteIds.has(s.value))?.value || data.sites[0]?.id || "main-store";
+    const nextSite = siteOptions.find((s) => !usedSiteIds.has(s.value))?.value || data.sites[0]?.id || "acr-office";
     setSiteGroups((prev) => [
       ...prev,
       {
@@ -131,29 +119,80 @@ export function PurchasesPage() {
     );
   };
 
+  // Helper: load all materials mapped to the current vendor
+  const getVendorMaterials = () => {
+    if (!vendorId) return [];
+    return data.materials.filter((m) => m.defaultVendorId === vendorId && m.active);
+  };
+
+  const loadAllVendorItemsSingle = () => {
+    const vm = getVendorMaterials();
+    if (vm.length === 0) {
+      toast.info("No materials mapped to this vendor in Masters.");
+      return;
+    }
+    const mapped: DraftLine[] = vm.map((m) => ({
+      key: uid("ln"),
+      materialId: m.id,
+      qty: "",
+      rate: "",
+      unit: m.purchaseUnit.split("/")[0].trim(),
+      size: "",
+      siteId: selectedSingleSiteId,
+    }));
+    setLines(mapped);
+    toast.success(`Loaded all ${vm.length} materials supplied by ${vendorName}`);
+  };
+
+  const clearItemsSingle = () => {
+    setLines([emptyLine()]);
+    toast.info("Material list cleared");
+  };
+
+  const loadVendorItemsForGroup = (groupId: string) => {
+    const vm = getVendorMaterials();
+    if (vm.length === 0) {
+      toast.info("No materials mapped to this vendor in Masters.");
+      return;
+    }
+    const group = siteGroups.find((g) => g.id === groupId);
+    const siteId = group?.siteId || "acr-office";
+    const mapped: DraftLine[] = vm.map((m) => ({
+      key: uid("ln"),
+      materialId: m.id,
+      qty: "",
+      rate: "",
+      unit: m.purchaseUnit.split("/")[0].trim(),
+      size: "",
+      siteId,
+    }));
+    updateGroupLines(groupId, mapped);
+    toast.success(`Loaded all ${vm.length} materials for this site`);
+  };
+
+  const clearItemsForGroup = (groupId: string) => {
+    updateGroupLines(groupId, [emptyLine()]);
+    toast.info("Cleared items for this site");
+  };
+
   const resetForm = () => {
-    setInvoiceNo("");
-    setProformaNo("");
-    setPoNo("");
     setDate(todayISO());
     setVendorId("");
     setVendorName("");
     setVendorAddress("");
     setVendorPhone("");
     setAllocation("single");
-    setSelectedSingleSiteId("main-store");
-    setNotes("");
+    setSelectedSingleSiteId("acr-office");
     setLines([emptyLine()]);
     setSiteGroups([
       {
         id: uid("grp"),
-        siteId: data.sites[0]?.id || "main-store",
+        siteId: data.sites[0]?.id || "acr-office",
         lines: [emptyLine()],
       },
     ]);
   };
 
-  // Vendor selection handler: in Indent mode, auto-populate all catalog items mapped to this vendor!
   const onSelectVendor = (id: string) => {
     setVendorId(id);
     const v = data.vendors.find((x) => x.id === id);
@@ -161,33 +200,6 @@ export function PurchasesPage() {
       setVendorName(v.name);
       setVendorAddress(v.address || "");
       setVendorPhone(v.phone || "");
-    }
-
-    if (activeTab === "indent" && id) {
-      const vendorMaterials = data.materials.filter((m) => m.defaultVendorId === id && m.active);
-      if (vendorMaterials.length > 0) {
-        const prefilledLines: DraftLine[] = vendorMaterials.map((m) => ({
-          key: uid("ln"),
-          materialId: m.id,
-          qty: "",
-          rate: "",
-          unit: m.purchaseUnit.split("/")[0].trim(),
-          size: "",
-          siteId: "",
-        }));
-        setLines(prefilledLines);
-        setSiteGroups((prev) =>
-          prev.map((g, idx) =>
-            idx === 0
-              ? {
-                  ...g,
-                  lines: prefilledLines.map((l) => ({ ...l, key: uid("ln") })),
-                }
-              : g,
-          ),
-        );
-        toast.info(`Loaded ${vendorMaterials.length} materials supplied by ${v?.name}`);
-      }
     }
   };
 
@@ -209,11 +221,19 @@ export function PurchasesPage() {
 
   // Site-wise breakdown for the boss's budget planning & priority decisions
   const siteWiseBreakdown = useMemo(() => {
-    const siteMap = new Map<string, { siteName: string; itemCount: number; totalAmount: number; items: { name: string; qty: number; unit: string; amount: number }[] }>();
+    const siteMap = new Map<
+      string,
+      {
+        siteName: string;
+        itemCount: number;
+        totalAmount: number;
+        items: { name: string; qty: number; unit: string; amount: number }[];
+      }
+    >();
 
     for (const l of effectiveLines) {
       if (!l.materialId || Number(l.qty) <= 0) continue;
-      const targetId = l.siteId || "main-store";
+      const targetId = l.siteId || "acr-office";
       const siteObj = siteOptions.find((s) => s.value === targetId);
       const siteName = siteObj ? siteObj.label : targetId;
       const mat = data.materials.find((m) => m.id === l.materialId);
@@ -236,16 +256,15 @@ export function PurchasesPage() {
       siteMap.set(targetId, cur);
     }
 
-    return Array.from(siteMap.entries()).map(([siteId, data]) => ({
+    return Array.from(siteMap.entries()).map(([siteId, d]) => ({
       siteId,
-      ...data,
+      ...d,
     }));
   }, [effectiveLines, siteOptions, data.materials]);
 
-  const save = () => {
-    const isIndent = activeTab === "indent";
+  const saveIndent = () => {
     const items = fromDrafts(effectiveLines, {
-      rate: !isIndent,
+      rate: false,
       site: allocation === "multi",
     });
 
@@ -258,18 +277,18 @@ export function PurchasesPage() {
       return;
     }
 
-    const id = uid(isIndent ? "ind" : "pur");
+    const id = uid("ind");
     let entryNo = "";
 
     updateData((d) => {
-      entryNo = nextNumber(isIndent ? "IND" : "PUR", d.purchases.map((x) => x.entryNo));
+      entryNo = nextNumber("IND", d.purchases.map((x) => x.entryNo));
       const record: Purchase = {
         id,
         entryNo,
-        docType: isIndent ? "Purchase Order" : docType,
-        invoiceNo: invoiceNo.trim(),
-        proformaNo: proformaNo.trim(),
-        poNo: poNo.trim(),
+        docType: "Purchase Order",
+        invoiceNo: "",
+        proformaNo: "",
+        poNo: "",
         date,
         vendorId,
         vendorName: vendorName.trim(),
@@ -278,8 +297,8 @@ export function PurchasesPage() {
         allocation,
         siteId: allocation === "single" ? selectedSingleSiteId : "",
         items,
-        notes: notes.trim(),
-        isIndent,
+        notes: "",
+        isIndent: true,
       };
 
       return {
@@ -288,28 +307,54 @@ export function PurchasesPage() {
       };
     });
 
-    toast.success(
-      isIndent
-        ? `Purchase Indent ${entryNo} created! Ready to print & email.`
-        : `Purchase Order / Inward ${entryNo} saved and inventory updated!`,
-    );
+    toast.success(`Purchase Indent ${entryNo} created! Ready to view, export, or print.`);
     resetForm();
   };
 
   const deletePurchase = (id: string, entryNo: string) => {
-    if (window.confirm(`Delete purchase entry ${entryNo}? Store stock will be recalculated.`)) {
+    if (window.confirm(`Delete purchase indent entry ${entryNo}?`)) {
       updateData((d) => ({
         ...d,
         purchases: d.purchases.filter((p) => p.id !== id),
       }));
-      toast.success(`Purchase ${entryNo} deleted`);
+      toast.success(`Indent ${entryNo} deleted`);
     }
+  };
+
+  const openInvoiceModal = (p: Purchase) => {
+    setInvoiceModalPurchase(p);
+    setRecordInvNo(p.vendorInvoiceNo || "");
+    setRecordInvDate(p.vendorInvoiceDate || todayISO());
+  };
+
+  const saveVendorInvoice = () => {
+    if (!invoiceModalPurchase) return;
+    if (!recordInvNo.trim()) {
+      toast.error("Please enter the vendor tax invoice / bill number");
+      return;
+    }
+
+    updateData((d) => ({
+      ...d,
+      purchases: d.purchases.map((p) =>
+        p.id === invoiceModalPurchase.id
+          ? {
+              ...p,
+              vendorInvoiceNo: recordInvNo.trim(),
+              vendorInvoiceDate: recordInvDate,
+            }
+          : p,
+      ),
+    }));
+
+    toast.success(`Vendor Tax Invoice ${recordInvNo.trim()} recorded for ${invoiceModalPurchase.entryNo}`);
+    setInvoiceModalPurchase(null);
   };
 
   const filteredPurchases = useMemo(() => {
     return data.purchases.filter((p) =>
       matchesQuery(
-        `${p.entryNo} ${p.invoiceNo} ${p.proformaNo} ${p.poNo} ${p.vendorName} ${p.docType} ${p.notes}`,
+        `${p.entryNo} ${p.vendorInvoiceNo || ""} ${p.vendorName} ${p.notes}`,
         query,
       ),
     );
@@ -318,120 +363,31 @@ export function PurchasesPage() {
   return (
     <>
       <PageHeader
-        title="Purchase & Inward Orders"
-        description="Raise official Purchase Orders, generate site-wise vendor indents with letterhead, and manage procurement."
+        title="Material Indents & Procurement"
+        description="Generate site-wise vendor indents for quotation enquiries. After receiving materials and the vendor's tax invoice, record it here."
       />
 
-      {/* Mode Switcher Tabs */}
-      <div className="flex rounded-lg border bg-muted/40 p-1 max-w-md mb-6">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab("purchase");
-            setLines([emptyLine()]);
-          }}
-          className={cn(
-            "flex-1 rounded-md px-4 py-2 text-xs font-bold transition-all text-center",
-            activeTab === "purchase"
-              ? "bg-copper text-white shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <ShoppingCart className="size-3.5 inline mr-1.5" />
-          Raise Purchase Order / Inward
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab("indent");
-            setLines([emptyLine()]);
-          }}
-          className={cn(
-            "flex-1 rounded-md px-4 py-2 text-xs font-bold transition-all text-center",
-            activeTab === "indent"
-              ? "bg-copper text-white shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <Send className="size-3.5 inline mr-1.5" />
-          Create Vendor Indent (Qty Enquiry)
-        </button>
-      </div>
-
-      {/* Main Entry Panel */}
+      {/* Main Indent Entry Panel */}
       <section className="panel p-5 sm:p-6 mb-8 border-t-4 border-t-copper">
-        <div className="mb-5 flex items-center justify-between border-b pb-3">
+        <div className="mb-5 flex items-center justify-between border-b pb-3 flex-wrap gap-2">
           <div>
-            <h2 className="text-base font-bold">
-              {activeTab === "purchase" ? "Raise Purchase Order / Inward Bill" : "Generate Vendor Indent (Quotation Enquiry)"}
-            </h2>
+            <h2 className="text-base font-bold text-foreground">Create Vendor Material Indent</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Select Single Site or Multiple Sites to calculate site-wise quantities for budget approval and ordering.
+              Select Single Site (or ACR Office) or Multiple Sites to prepare quantity enquiry for the vendor.
             </p>
           </div>
-          {activeTab === "indent" && (
-            <span className="rounded bg-info-soft px-2.5 py-1 text-xs font-bold text-info border border-info/30">
-              Indent Mode: Rate & Amount Excluded for Quotation
-            </span>
-          )}
+          <span className="rounded bg-info-soft px-2.5 py-1 text-xs font-bold text-info border border-info/30">
+            Material Indent Mode: Quantity Enquiry for Vendor
+          </span>
         </div>
 
         <div className="grid gap-4 md:grid-cols-4">
-          {/* Doc Type */}
-          {activeTab === "purchase" && (
-            <Field label="Document Type" required>
-              <select
-                value={docType}
-                onChange={(e) => setDocType(e.target.value as PurchaseDocType)}
-                className="h-11 w-full rounded-md border border-input bg-card px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {PURCHASE_DOC_TYPES.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
-
-          {/* Invoice / Bill No */}
-          <Field label={activeTab === "purchase" ? "Vendor Ref / Bill / Inv No." : "Indent Enquiry Ref No."}>
-            <Input
-              value={invoiceNo}
-              onChange={(e) => setInvoiceNo(e.target.value)}
-              placeholder={activeTab === "purchase" ? "e.g. INV-908 or PO-2026-01" : "e.g. IND-RNK-01"}
-              className="h-11 font-medium"
-            />
-          </Field>
-
-          {/* Proforma No */}
-          {activeTab === "purchase" && (
-            <Field label="Proforma Invoice No.">
-              <Input
-                value={proformaNo}
-                onChange={(e) => setProformaNo(e.target.value)}
-                placeholder="e.g. PI-8821"
-                className="h-11"
-              />
-            </Field>
-          )}
-
-          {/* Purchase Date */}
+          {/* Order / Indent Date */}
           <Field label="Order / Indent Date" required>
             <Input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="h-11"
-            />
-          </Field>
-
-          {/* Internal PO No */}
-          <Field label="Internal Company PO No.">
-            <Input
-              value={poNo}
-              onChange={(e) => setPoNo(e.target.value)}
-              placeholder="e.g. PO-AIR-2026-04"
               className="h-11"
             />
           </Field>
@@ -458,7 +414,7 @@ export function PurchasesPage() {
           </Field>
 
           {/* Vendor Address (Editable) */}
-          <Field label="Vendor Address / City" className="md:col-span-2">
+          <Field label="Vendor Address / Location" className="md:col-span-2">
             <Input
               value={vendorAddress}
               onChange={(e) => setVendorAddress(e.target.value)}
@@ -478,9 +434,9 @@ export function PurchasesPage() {
           </Field>
         </div>
 
-        {/* SITE ALLOCATION: EXACTLY TWO CHOICES (Single Site vs Multiple Sites) */}
+        {/* SITE ALLOCATION: Single Site (or ACR Office) vs Multiple Sites */}
         <div className="mt-5 border-t pt-4">
-          <Field label="Site Allocation Option (Both for Indents and Purchase Orders)" required>
+          <Field label="Site Allocation Option" required>
             <SegmentedControl
               value={allocation}
               onChange={setAllocation}
@@ -488,12 +444,12 @@ export function PurchasesPage() {
                 {
                   value: "single",
                   label: "Option 1: Single Site",
-                  sub: "Order / Indent for one specific site or Main Central Store",
+                  sub: "Indent for one specific site or ACR Office",
                 },
                 {
                   value: "multi",
                   label: "Option 2: Multiple Sites",
-                  sub: "Select a site, add all its materials, then add another site as needed",
+                  sub: "Select a site, add its materials, then add another site as needed",
                 },
               ]}
             />
@@ -506,7 +462,7 @@ export function PurchasesPage() {
                   options={siteOptions}
                   value={selectedSingleSiteId}
                   onChange={setSelectedSingleSiteId}
-                  placeholder="Select site or Main Central Store…"
+                  placeholder="Select site or ACR Office…"
                 />
               </Field>
             </div>
@@ -516,22 +472,41 @@ export function PurchasesPage() {
         {/* Materials Section: Single Site vs Grouped Multiple Sites */}
         {allocation === "single" ? (
           <div className="mt-6 border-t pt-4">
-            <div className="mb-3 flex items-center justify-between">
-              <span className="eyebrow">
-                {activeTab === "purchase" ? "Materials Ordered" : "Materials for Indent Enquiry"}
-              </span>
-              {activeTab === "purchase" && (
-                <div className="num text-sm font-bold text-copper whitespace-nowrap">
-                  Total Value: {formatINR(totalCalculatedAmount)}
-                </div>
-              )}
+            <div className="mb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="eyebrow">Materials for Indent Enquiry</span>
+
+              {/* Vendor Fast Actions */}
+              <div className="flex items-center gap-2">
+                {vendorId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs font-semibold gap-1 text-copper border-copper/40 hover:bg-copper-soft"
+                    onClick={loadAllVendorItemsSingle}
+                  >
+                    <Sparkles className="size-3.5" />
+                    <span>All Items in Vendor</span>
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs text-muted-foreground hover:text-foreground gap-1"
+                  onClick={clearItemsSingle}
+                >
+                  <RotateCcw className="size-3.5" />
+                  <span>Clear Items</span>
+                </Button>
+              </div>
             </div>
 
             <LineItemsEditor
               lines={lines}
               onChange={setLines}
               materials={data.materials}
-              mode={activeTab === "purchase" ? "purchase" : "indent"}
+              mode="indent"
               onMaterialPicked={onMaterialPicked}
             />
           </div>
@@ -544,22 +519,13 @@ export function PurchasesPage() {
                   Multiple Sites Material Breakdown ({siteGroups.length} Site{siteGroups.length > 1 ? "s" : ""})
                 </span>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Select a site, add all materials for it, then click "+ Add Another Site" to add more sites.
+                  Select a site, add its materials, and click "+ Add Another Site" to add more sites.
                 </p>
               </div>
-              {activeTab === "purchase" && (
-                <div className="num text-sm font-bold text-copper whitespace-nowrap">
-                  Overall Order Total: {formatINR(totalCalculatedAmount)}
-                </div>
-              )}
             </div>
 
             <div className="space-y-6">
               {siteGroups.map((group, groupIdx) => {
-                const groupSubtotal = group.lines.reduce((acc, l) => {
-                  return acc + (Number(l.qty) || 0) * (Number(l.rate) || 0);
-                }, 0);
-
                 return (
                   <div
                     key={group.id}
@@ -584,27 +550,39 @@ export function PurchasesPage() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between sm:justify-end gap-3">
-                        {activeTab === "purchase" && (
-                          <div className="text-right">
-                            <span className="text-[10px] text-muted-foreground uppercase font-bold block">
-                              Site Subtotal
-                            </span>
-                            <span className="num text-xs font-bold text-copper whitespace-nowrap">
-                              {formatINR(groupSubtotal)}
-                            </span>
-                          </div>
+                      <div className="flex items-center gap-2">
+                        {vendorId && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-xs font-semibold gap-1 text-copper border-copper/40 hover:bg-copper-soft"
+                            onClick={() => loadVendorItemsForGroup(group.id)}
+                          >
+                            <Sparkles className="size-3.5" />
+                            <span>All Items in Vendor</span>
+                          </Button>
                         )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs text-muted-foreground hover:text-foreground gap-1"
+                          onClick={() => clearItemsForGroup(group.id)}
+                        >
+                          <RotateCcw className="size-3.5" />
+                          <span>Clear</span>
+                        </Button>
                         {siteGroups.length > 1 && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 text-destructive hover:bg-destructive/10 text-xs gap-1"
+                            className="h-8 text-destructive hover:bg-destructive/10 text-xs gap-1 ml-1"
                             onClick={() => removeSiteGroup(group.id)}
-                            title="Remove this site from the order"
+                            title="Remove this site"
                           >
                             <Trash2 className="size-3.5" />
-                            <span className="hidden sm:inline">Remove Site</span>
+                            <span className="hidden sm:inline">Remove</span>
                           </Button>
                         )}
                       </div>
@@ -615,7 +593,7 @@ export function PurchasesPage() {
                       lines={group.lines}
                       onChange={(newLines) => updateGroupLines(group.id, newLines)}
                       materials={data.materials}
-                      mode={activeTab === "purchase" ? "purchase" : "indent"}
+                      mode="indent"
                       onMaterialPicked={onMaterialPicked}
                     />
                   </div>
@@ -633,7 +611,7 @@ export function PurchasesPage() {
                 className="gap-2 border-dashed border-2 border-copper/50 hover:border-copper hover:bg-copper-soft text-sm font-bold text-copper"
               >
                 <Plus className="size-4" />
-                <span>+ Add Another Site to this {activeTab === "purchase" ? "Order" : "Indent"}</span>
+                <span>+ Add Another Site to this Indent</span>
               </Button>
             </div>
           </div>
@@ -669,55 +647,31 @@ export function PurchasesPage() {
                       </li>
                     ))}
                   </ul>
-                  {activeTab === "purchase" && (
-                    <div className="border-t pt-1.5 mt-2 flex justify-between text-xs font-bold text-copper">
-                      <span>Site Subtotal:</span>
-                      <span className="num whitespace-nowrap">{formatINR(b.totalAmount)}</span>
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Notes & Submit */}
-        <div className="mt-6 grid gap-4 border-t pt-4 md:grid-cols-[1fr_auto] md:items-end">
-          <Field label="Order / Delivery Instructions">
-            <Textarea
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Delivery schedule, vehicle requirements, urgent shortage note..."
-            />
-          </Field>
-
-          <div className="flex gap-2">
-            <Button variant="outline" size="lg" onClick={resetForm} className="h-11">
-              Reset
-            </Button>
-            <Button variant="copper" size="lg" onClick={save} className="h-11">
-              {activeTab === "purchase" ? (
-                <>
-                  <PackagePlus className="size-4" /> Save Purchase Order
-                </>
-              ) : (
-                <>
-                  <Send className="size-4" /> Generate Indent Document
-                </>
-              )}
-            </Button>
-          </div>
+        {/* Action Buttons */}
+        <div className="mt-6 flex justify-end gap-2 border-t pt-4">
+          <Button variant="outline" size="lg" onClick={resetForm} className="h-11">
+            Reset
+          </Button>
+          <Button variant="copper" size="lg" onClick={saveIndent} className="h-11 gap-1.5 font-bold">
+            <Send className="size-4" />
+            <span>Generate Indent Document</span>
+          </Button>
         </div>
       </section>
 
-      {/* Purchases Log Table */}
+      {/* Indents Log Table */}
       <section className="panel overflow-hidden">
         <div className="border-b px-5 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-card">
           <div>
-            <h2 className="font-bold text-base">Purchase & Inward Order Log</h2>
+            <h2 className="font-bold text-base">Material Indents Log</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Complete archive of all Purchase Orders, Vendor Bills, and Indents with print & PDF export.
+              Archive of all generated vendor indents. Record company tax invoices after buying.
             </p>
           </div>
 
@@ -726,7 +680,7 @@ export function PurchasesPage() {
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search entry, vendor, ref no…"
+              placeholder="Search entry, vendor, tax invoice…"
               className="h-9 pl-9 pr-3 text-xs"
             />
           </div>
@@ -734,27 +688,30 @@ export function PurchasesPage() {
 
         {filteredPurchases.length === 0 ? (
           <div className="px-6 py-12 text-center text-sm text-muted-foreground">
-            No purchase records found.
+            No material indent records found.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="border-b bg-muted/40 font-bold text-muted-foreground uppercase tracking-wider text-[10px]">
                 <tr>
-                  <th className="px-4 py-3 whitespace-nowrap">Entry No</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Indent No</th>
                   <th className="px-4 py-3 whitespace-nowrap">Date</th>
-                  <th className="px-4 py-3 whitespace-nowrap">Type / Reference</th>
                   <th className="px-4 py-3 whitespace-nowrap">Vendor</th>
                   <th className="px-4 py-3 whitespace-nowrap">Allocation</th>
                   <th className="px-4 py-3 whitespace-nowrap">Items</th>
-                  <th className="px-4 py-3 text-right whitespace-nowrap">Total Amount</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Vendor Tax Invoice</th>
                   <th className="px-4 py-3 text-right whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {filteredPurchases.map((p) => {
-                  const val = lineValue(p.items);
-                  const s = p.siteId === "main-store" ? { clientName: "Main Central Store" } : p.siteId ? data.sites.find((x) => x.id === p.siteId) : undefined;
+                  const s =
+                    p.siteId === "main-store" || p.siteId === "acr-office"
+                      ? { clientName: "ACR Office" }
+                      : p.siteId
+                        ? data.sites.find((x) => x.id === p.siteId)
+                        : undefined;
 
                   return (
                     <tr key={p.id} className="hover:bg-muted/20 transition-colors">
@@ -762,20 +719,9 @@ export function PurchasesPage() {
                         <span className="num font-bold text-copper px-2 py-0.5 rounded bg-copper-soft border border-copper/30 whitespace-nowrap inline-block">
                           {p.entryNo}
                         </span>
-                        {p.isIndent && (
-                          <span className="ml-1.5 rounded bg-info-soft px-1.5 py-0.5 text-[10px] font-bold text-info whitespace-nowrap inline-block">
-                            Indent
-                          </span>
-                        )}
                       </td>
                       <td className="px-4 py-3.5 text-muted-foreground whitespace-nowrap">
                         {formatDate(p.date)}
-                      </td>
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="font-semibold text-foreground">{p.docType}</div>
-                        <div className="num text-[11px] text-muted-foreground whitespace-nowrap">
-                          {p.invoiceNo ? `Ref: ${p.invoiceNo}` : p.proformaNo ? `PI: ${p.proformaNo}` : p.poNo ? `PO: ${p.poNo}` : "—"}
-                        </div>
                       </td>
                       <td className="px-4 py-3.5 font-bold text-foreground whitespace-nowrap">{p.vendorName}</td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
@@ -790,15 +736,40 @@ export function PurchasesPage() {
                         )}
                       </td>
                       <td className="px-4 py-3.5 text-muted-foreground whitespace-nowrap">{p.items.length} items</td>
-                      <td className="px-4 py-3.5 text-right num font-bold text-foreground whitespace-nowrap">
-                        {p.isIndent ? "—" : formatINR(val)}
+                      <td className="px-4 py-3.5 whitespace-nowrap">
+                        {p.vendorInvoiceNo ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded bg-success-soft text-success border border-success/30 px-2 py-0.5 text-[11px] font-bold num">
+                              Inv: {p.vendorInvoiceNo}
+                            </span>
+                            {p.vendorInvoiceDate && (
+                              <span className="text-[10px] text-muted-foreground">({formatDate(p.vendorInvoiceDate)})</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openInvoiceModal(p)}
+                              className="text-[10px] text-copper hover:underline font-bold"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openInvoiceModal(p)}
+                            className="inline-flex items-center gap-1 rounded border border-copper/40 bg-copper-soft/50 px-2 py-1 text-[11px] font-semibold text-copper hover:bg-copper-soft"
+                          >
+                            <Receipt className="size-3" />
+                            <span>+ Record Tax Invoice</span>
+                          </button>
+                        )}
                       </td>
                       <td className="px-4 py-3.5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
                           <Button asChild variant="outline" size="sm" className="h-7 text-xs gap-1 whitespace-nowrap">
                             <Link to={`/print/purchase/${p.id}`} target="_blank">
                               <Printer className="size-3 text-copper" />
-                              <span>Open & Print</span>
+                              <span>View / Export</span>
                             </Link>
                           </Button>
                           <Button
@@ -820,6 +791,54 @@ export function PurchasesPage() {
           </div>
         )}
       </section>
+
+      {/* Record Vendor Tax Invoice Modal */}
+      {invoiceModalPurchase && (
+        <Dialog open={!!invoiceModalPurchase} onOpenChange={() => setInvoiceModalPurchase(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold flex items-center gap-2">
+                <Receipt className="size-5 text-copper" />
+                <span>Record Vendor Tax Invoice / Bill</span>
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground">
+                Enter the official tax invoice number and date provided by {invoiceModalPurchase.vendorName} for Indent {invoiceModalPurchase.entryNo}.
+              </p>
+            </DialogHeader>
+
+            <div className="grid gap-3.5 py-3">
+              <Field label="Vendor Tax Invoice / Bill No." required>
+                <Input
+                  value={recordInvNo}
+                  onChange={(e) => setRecordInvNo(e.target.value)}
+                  placeholder="e.g. GST-2026/8941"
+                  className="h-10 font-bold"
+                  autoFocus
+                />
+              </Field>
+
+              <Field label="Tax Invoice Date" required>
+                <Input
+                  type="date"
+                  value={recordInvDate}
+                  onChange={(e) => setRecordInvDate(e.target.value)}
+                  className="h-10"
+                />
+              </Field>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setInvoiceModalPurchase(null)}>
+                Cancel
+              </Button>
+              <Button variant="copper" onClick={saveVendorInvoice} className="gap-1.5 font-bold">
+                <CheckCircle2 className="size-4" />
+                <span>Save Tax Invoice</span>
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

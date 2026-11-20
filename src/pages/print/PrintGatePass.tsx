@@ -1,5 +1,8 @@
 import { useParams, Link } from "react-router-dom";
-import { Printer, ArrowLeft, Snowflake } from "lucide-react";
+import { useState } from "react";
+import { Printer, ArrowLeft, Snowflake, Copy, FileSpreadsheet, Check } from "lucide-react";
+import { toast } from "sonner";
+import * as XLSX from "xlsx";
 import { useData } from "@/lib/store";
 import { formatDate, formatQty } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -7,6 +10,7 @@ import { Button } from "@/components/ui/button";
 export function PrintGatePass() {
   const { id } = useParams<{ id: string }>();
   const data = useData();
+  const [copied, setCopied] = useState(false);
 
   const issue = data.issues.find((i) => i.id === id);
   const site = issue ? data.sites.find((s) => s.id === issue.siteId) : undefined;
@@ -23,18 +27,78 @@ export function PrintGatePass() {
     );
   }
 
+  const copyToExcelClipboard = () => {
+    const headers = ["Sl No", "Item Code", "Material Description", "Size", "Qty Issued", "Unit"];
+    const rows = issue.items.map((item, idx) => {
+      const m = matsMap.get(item.materialId);
+      return [
+        idx + 1,
+        m?.code || item.materialId,
+        m?.name || item.materialId,
+        item.size || "—",
+        item.qty,
+        item.unit || m?.issueUnit || "Nos",
+      ];
+    });
+
+    const tsv = [headers.join("\t"), ...rows.map((r) => r.join("\t"))].join("\n");
+    navigator.clipboard.writeText(tsv);
+    setCopied(true);
+    toast.success("Gate pass items copied! You can paste directly into Excel (Ctrl+V).");
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const exportExcel = () => {
+    const rows = issue.items.map((item, idx) => {
+      const m = matsMap.get(item.materialId);
+      return {
+        "Sl No": idx + 1,
+        "Item Code": m?.code || item.materialId,
+        "Material Description": m?.name || item.materialId,
+        Size: item.size || "—",
+        "Qty Issued": item.qty,
+        Unit: item.unit || m?.issueUnit || "Nos",
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Gate Pass");
+    XLSX.writeFile(wb, `GatePass_${issue.slipNo}_${site?.clientName?.replace(/\s+/g, "_") || "Site"}.xlsx`);
+    toast.success("Excel file downloaded!");
+  };
+
   return (
     <div className="min-h-screen bg-zinc-100 p-4 sm:p-8 print:bg-white print:p-0">
-      {/* Top Floating Bar for Screen View Only */}
-      <div className="no-print mx-auto max-w-4xl mb-6 flex items-center justify-between rounded-lg bg-card p-4 border shadow-sm">
+      {/* Top Action Bar */}
+      <div className="no-print mx-auto max-w-4xl mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg bg-card p-4 border shadow-sm">
         <Button asChild variant="ghost" size="sm">
           <Link to="/ledger">
             <ArrowLeft className="size-4 mr-1" /> Back to Ledger
           </Link>
         </Button>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-2">A4 Delivery Challan Preview</span>
-          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyToExcelClipboard}
+            className="gap-1.5 text-xs font-semibold"
+          >
+            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-copper" />}
+            <span>{copied ? "Copied for Excel!" : "Copy Table to Excel"}</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportExcel}
+            className="gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+          >
+            <FileSpreadsheet className="size-3.5 text-emerald-600" />
+            <span>Export Excel (.xlsx)</span>
+          </Button>
+
+          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5 text-xs font-bold">
             <Printer className="size-4" /> Print Gate Pass / Challan
           </Button>
         </div>
@@ -113,7 +177,7 @@ export function PrintGatePass() {
               </div>
               <div>
                 <span className="text-zinc-500">Dispatched From:</span>{" "}
-                <span className="font-semibold text-zinc-800">Main Central Warehouse</span>
+                <span className="font-semibold text-zinc-800">ACR Office</span>
               </div>
               <div>
                 <span className="text-zinc-500">Work Status:</span>{" "}

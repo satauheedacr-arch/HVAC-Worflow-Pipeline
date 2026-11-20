@@ -1,30 +1,38 @@
 export type ProjectStatus =
-  | "New Site / PO Received"
-  | "Quotation In Progress"
-  | "Gone for Inspection"
-  | "Quotation Sent"
-  | "Confirmed"
-  | "Work Under Progress"
-  | "Material at Site"
+  | "New Enquiry"
+  | "Site Assigned"
+  | "Site Inspection"
+  | "BOQ (Ready)"
+  | "Quotation in Progress"
+  | "Qtn Sent / Submitted"
+  | "Order Confirmed / PO Received"
+  | "Material Order Completed"
+  | "Material Issued"
+  | "WIP (Work in Progress)"
   | "Work Completed"
-  | "FSR & Handover"
-  | "Tax Invoiced";
+  | "FSR Signed & Handing Over Submitted"
+  | "Tax Invoice Raised"
+  | "Payment Received / Closed";
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
-  "New Site / PO Received",
-  "Quotation In Progress",
-  "Gone for Inspection",
-  "Quotation Sent",
-  "Confirmed",
-  "Work Under Progress",
-  "Material at Site",
+  "New Enquiry",
+  "Site Assigned",
+  "Site Inspection",
+  "BOQ (Ready)",
+  "Quotation in Progress",
+  "Qtn Sent / Submitted",
+  "Order Confirmed / PO Received",
+  "Material Order Completed",
+  "Material Issued",
+  "WIP (Work in Progress)",
   "Work Completed",
-  "FSR & Handover",
-  "Tax Invoiced",
+  "FSR Signed & Handing Over Submitted",
+  "Tax Invoice Raised",
+  "Payment Received / Closed",
 ];
 
-export type IssueStatus = "In Progress" | "Completed";
-export const ISSUE_STATUSES: IssueStatus[] = ["In Progress", "Completed"];
+export type IssueStatus = "Dispatched" | "In Progress" | "Completed";
+export const ISSUE_STATUSES: IssueStatus[] = ["Dispatched", "In Progress", "Completed"];
 
 export type PurchaseDocType = "Purchase Order" | "Vendor Bill / Invoice" | "Proforma Invoice" | "Delivery Challan";
 export const PURCHASE_DOC_TYPES: PurchaseDocType[] = [
@@ -117,6 +125,9 @@ export interface Purchase {
   items: LineItem[];
   notes: string;
   isIndent?: boolean;
+  // Recorded after buying when vendor tax invoice is received
+  vendorInvoiceNo?: string;
+  vendorInvoiceDate?: string;
 }
 
 export interface IssueSlip {

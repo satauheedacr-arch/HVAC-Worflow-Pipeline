@@ -11,6 +11,7 @@ import {
   ShoppingBag,
   Truck,
   Layers,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { useData, updateData } from "@/lib/store";
 import { boqReconciliation } from "@/lib/calc";
 import { formatQty, formatDate, formatINR } from "@/lib/format";
-import type { ProjectStatus, Site } from "@/types";
+import { PROJECT_STATUSES, type ProjectStatus, type Site } from "@/types";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/app/ui-bits";
 import { EstimatedBoqDialog } from "@/components/app/SiteFormDialog";
 import { SearchSelect } from "@/components/app/SearchSelect";
@@ -170,7 +171,7 @@ export function BoqPage() {
   };
 
   /**
-   * Smart Toggle Logic with Rollback:
+   * Smart Status Update Logic (direct set, with optional rollback from current status):
    */
   const handleStatusToggle = (targetStatus: ProjectStatus) => {
     if (!site) return;
@@ -182,7 +183,7 @@ export function BoqPage() {
         if (s.id !== site.id) return s;
 
         if (isCurrent) {
-          const reverted = s.statusBefore || "Work Under Progress";
+          const reverted = (s.statusBefore as ProjectStatus) || "WIP (Work in Progress)";
           toast.info(`Status reverted to "${reverted}"`);
           return {
             ...s,
@@ -208,20 +209,19 @@ export function BoqPage() {
         description="Editable side-by-side material reconciliation: Estimated BOQ | Total Issued | Total Returned | Net Consumed (Final BOQ) with live unit editing."
         actions={
           site ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => setBoqDialogOpen(true)}
-                className="gap-1.5 h-9"
+                className="gap-2 h-10 px-4 font-bold border-copper/40 text-copper hover:bg-copper-soft"
               >
-                <Edit2 className="size-3.5 text-copper" />
+                <Edit2 className="size-4" />
                 <span>Bulk Edit Planned BOQ</span>
               </Button>
-              <Button asChild variant="copper" size="sm" className="gap-1.5 h-9">
+              <Button asChild variant="copper" className="gap-2 h-10 px-4 font-bold shadow-sm">
                 <Link to={`/print/boq/${site.id}`} target="_blank">
-                  <Printer className="size-3.5" />
-                  <span>Print Final BOQ / FSR</span>
+                  <Printer className="size-4" />
+                  <span>View / Print Final BOQ (FSR)</span>
                 </Link>
               </Button>
             </div>
@@ -265,19 +265,35 @@ export function BoqPage() {
         </EmptyState>
       ) : (
         <div className="space-y-6">
-          {/* Milestone Toggle Buttons with Rollback Logic */}
+          {/* Milestone Toggle Buttons with 14 Stages & Rollback Logic */}
           <div className="panel p-4 bg-muted/20 border-copper/30">
-            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
               <div>
-                <span className="eyebrow">Site Milestone Progression</span>
+                <span className="eyebrow">Project Lifecycle & Milestone Progression</span>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Click a milestone to mark it completed. Clicking an active milestone reverts back to previous status.
+                  Click a milestone to mark it completed, or use the stage selector to jump directly to any of the 14 pipeline stages.
                 </p>
+              </div>
+
+              {/* Direct Stage Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-muted-foreground">Change Stage:</span>
+                <select
+                  value={site.status}
+                  onChange={(e) => handleStatusToggle(e.target.value as ProjectStatus)}
+                  className="h-8 rounded-md border border-input bg-card px-2.5 text-xs font-bold text-foreground focus:ring-2 focus:ring-copper"
+                >
+                  {PROJECT_STATUSES.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            <div className="grid gap-2.5 sm:grid-cols-3">
-              {/* Work Completed Toggle */}
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Milestone 1: Work Completed */}
               <button
                 type="button"
                 onClick={() => handleStatusToggle("Work Completed")}
@@ -307,62 +323,94 @@ export function BoqPage() {
                 />
               </button>
 
-              {/* FSR & Handover Toggle */}
+              {/* Milestone 2: FSR Signed & Handing Over Submitted */}
               <button
                 type="button"
-                onClick={() => handleStatusToggle("FSR & Handover")}
+                onClick={() => handleStatusToggle("FSR Signed & Handing Over Submitted")}
                 className={cn(
                   "flex items-center justify-between rounded-lg border p-3 text-left transition-all",
-                  site.status === "FSR & Handover"
+                  site.status === "FSR Signed & Handing Over Submitted"
                     ? "border-copper bg-copper text-white shadow-md ring-2 ring-copper/30"
                     : "border-input bg-card hover:border-foreground/40",
                 )}
               >
                 <div>
-                  <div className="font-bold text-xs">2. FSR & Handover</div>
+                  <div className="font-bold text-xs">2. FSR Signed & Handover</div>
                   <div
                     className={cn(
                       "text-[10px] mt-0.5",
-                      site.status === "FSR & Handover" ? "text-white/80" : "text-muted-foreground",
+                      site.status === "FSR Signed & Handing Over Submitted"
+                        ? "text-white/80"
+                        : "text-muted-foreground",
                     )}
                   >
-                    {site.fsrNo ? `FSR No: ${site.fsrNo}` : "Report signed by client"}
+                    {site.fsrNo ? `FSR No: ${site.fsrNo}` : "Client signed report"}
                   </div>
                 </div>
                 <CheckCircle2
                   className={cn(
                     "size-5",
-                    site.status === "FSR & Handover" ? "text-white" : "text-muted-foreground/40",
+                    site.status === "FSR Signed & Handing Over Submitted" ? "text-white" : "text-muted-foreground/40",
                   )}
                 />
               </button>
 
-              {/* Tax Invoiced Toggle */}
+              {/* Milestone 3: Tax Invoice Raised */}
               <button
                 type="button"
-                onClick={() => handleStatusToggle("Tax Invoiced")}
+                onClick={() => handleStatusToggle("Tax Invoice Raised")}
                 className={cn(
                   "flex items-center justify-between rounded-lg border p-3 text-left transition-all",
-                  site.status === "Tax Invoiced"
-                    ? "border-emerald-600 bg-emerald-600 text-white shadow-md ring-2 ring-emerald-600/30"
+                  site.status === "Tax Invoice Raised"
+                    ? "border-amber-600 bg-amber-600 text-white shadow-md ring-2 ring-amber-600/30"
                     : "border-input bg-card hover:border-foreground/40",
                 )}
               >
                 <div>
-                  <div className="font-bold text-xs">3. Tax Invoiced (Closed)</div>
+                  <div className="font-bold text-xs">3. Tax Invoice Raised</div>
                   <div
                     className={cn(
                       "text-[10px] mt-0.5",
-                      site.status === "Tax Invoiced" ? "text-white/80" : "text-muted-foreground",
+                      site.status === "Tax Invoice Raised" ? "text-white/80" : "text-muted-foreground",
                     )}
                   >
-                    Final tax invoice raised & handed over
+                    Official company invoice billed
                   </div>
                 </div>
                 <Receipt
                   className={cn(
                     "size-5",
-                    site.status === "Tax Invoiced" ? "text-white" : "text-muted-foreground/40",
+                    site.status === "Tax Invoice Raised" ? "text-white" : "text-muted-foreground/40",
+                  )}
+                />
+              </button>
+
+              {/* Milestone 4: Payment Received / Closed */}
+              <button
+                type="button"
+                onClick={() => handleStatusToggle("Payment Received / Closed")}
+                className={cn(
+                  "flex items-center justify-between rounded-lg border p-3 text-left transition-all",
+                  site.status === "Payment Received / Closed"
+                    ? "border-emerald-600 bg-emerald-600 text-white shadow-md ring-2 ring-emerald-600/30"
+                    : "border-input bg-card hover:border-foreground/40",
+                )}
+              >
+                <div>
+                  <div className="font-bold text-xs">4. Payment Received (Closed)</div>
+                  <div
+                    className={cn(
+                      "text-[10px] mt-0.5",
+                      site.status === "Payment Received / Closed" ? "text-white/80" : "text-muted-foreground",
+                    )}
+                  >
+                    Settled & archived to Completed
+                  </div>
+                </div>
+                <CheckCircle2
+                  className={cn(
+                    "size-5",
+                    site.status === "Payment Received / Closed" ? "text-white" : "text-muted-foreground/40",
                   )}
                 />
               </button>
@@ -602,7 +650,7 @@ export function BoqPage() {
                   No technician slips recorded for this site yet.
                 </div>
               ) : (
-                <ul className="divide-y text-xs max-h-[300px] overflow-y-auto">
+                <ul className="divide-y text-xs">
                   {linkedIssues.map((i) => (
                     <li key={i.id} className="flex items-center justify-between p-3.5 hover:bg-muted/20">
                       <div>

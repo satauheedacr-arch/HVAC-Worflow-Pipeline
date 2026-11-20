@@ -27,15 +27,22 @@ export function DashboardPage() {
 
   const stock = useMemo(() => storeStock(data), [data]);
   const low = useMemo(() => lowStockItems(data, stock), [data, stock]);
-  const activeSites = data.sites.filter((s) => s.status !== "Tax Invoiced");
+  const activeSites = data.sites.filter(
+    (s) => s.status !== "Payment Received / Closed" && (s.status as string) !== "Tax Invoiced",
+  );
+  const completedSites = data.sites.filter(
+    (s) => s.status === "Payment Received / Closed" || (s.status as string) === "Tax Invoiced",
+  );
   const spend = totalPurchaseValue(data);
   const sites = new Map(data.sites.map((s) => [s.id, s]));
+
+  const allActivitiesCount = data.purchases.length + data.issues.length + data.returns.length;
 
   const activity = [
     ...data.purchases.map((p) => ({
       id: p.id,
       date: p.date,
-      kind: "Purchase" as const,
+      kind: "Indent" as const,
       no: p.invoiceNo || p.entryNo,
       who: p.vendorName,
       site: p.siteId,
@@ -69,18 +76,33 @@ export function DashboardPage() {
         title="Dashboard"
         description="Live overview of active HVAC sites, store stock alerts, material spend, and team slips."
         actions={
-          <div className="flex flex-wrap gap-2.5">
-            <Button variant="copper" size="lg" onClick={() => setNewSiteOpen(true)}>
-              <Plus className="size-4" /> New Client/Site
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="copper"
+              className="h-10 px-4 gap-1.5 font-bold shadow-xs"
+              onClick={() => setNewSiteOpen(true)}
+            >
+              <Plus className="size-4" />
+              <span>New Client/Site</span>
             </Button>
-            <Button asChild size="lg" variant="default">
+            <Button
+              asChild
+              variant="default"
+              className="h-10 px-4 gap-1.5 font-bold shadow-xs bg-primary text-primary-foreground"
+            >
               <Link to="/purchases">
-                <PackagePlus className="size-4" /> Log Purchase
+                <PackagePlus className="size-4" />
+                <span>Material Indents</span>
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline">
+            <Button
+              asChild
+              variant="outline"
+              className="h-10 px-4 gap-1.5 font-bold border-input bg-card hover:bg-accent"
+            >
               <Link to="/ledger">
-                <ArrowUpFromLine className="size-4" /> Issue Material
+                <ArrowUpFromLine className="size-4 text-copper" />
+                <span>Issue Material</span>
               </Link>
             </Button>
           </div>
@@ -94,7 +116,7 @@ export function DashboardPage() {
           value={String(activeSites.length)}
           icon={<Building2 className="text-info" />}
           tone="bg-info-soft"
-          sub={`${data.sites.filter((s) => s.status === "Tax Invoiced").length} completed`}
+          sub={`${completedSites.length} completed`}
         />
         <StatCard
           label="Material Inward Spend"
@@ -208,8 +230,14 @@ export function DashboardPage() {
       {/* Recent Activity Table */}
       <section className="panel mt-6 overflow-hidden">
         <div className="border-b px-5 py-4 flex items-center justify-between bg-card">
-          <h2 className="font-bold text-sm">Recent Activity Log</h2>
-          <span className="text-xs text-muted-foreground">Showing last 8 operations</span>
+          <div className="flex items-center gap-2">
+            <h2 className="font-bold text-sm">Recent Activity Log</h2>
+            <span className="text-xs text-muted-foreground hidden sm:inline">(last 8 entries)</span>
+          </div>
+          <Link to="/activity" className="text-xs font-bold text-copper hover:underline flex items-center gap-1">
+            <span>View All Activity Log ({allActivitiesCount})</span>
+            <ArrowRight className="size-3.5" />
+          </Link>
         </div>
         {activity.length === 0 ? (
           <div className="px-5 py-12 text-center text-sm text-muted-foreground">
@@ -228,14 +256,14 @@ export function DashboardPage() {
                   <span
                     className={cn(
                       "flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4",
-                      a.kind === "Purchase"
+                      a.kind === "Indent"
                         ? "bg-copper-soft text-copper"
                         : a.kind === "Issue"
                           ? "bg-info-soft text-info"
                           : "bg-success-soft text-success",
                     )}
                   >
-                    {a.kind === "Purchase" ? (
+                    {a.kind === "Indent" ? (
                       <PackagePlus />
                     ) : a.kind === "Issue" ? (
                       <ArrowUpFromLine />
@@ -252,7 +280,7 @@ export function DashboardPage() {
                     </div>
                     <div className="truncate text-xs text-muted-foreground mt-0.5">
                       <span className="font-medium text-foreground">{a.who}</span>
-                      {s ? ` → ${s.clientName}` : a.kind === "Purchase" ? " → Main Store" : ""}
+                      {s ? ` → ${s.clientName}` : a.kind === "Indent" ? " → ACR Office" : ""}
                     </div>
                   </div>
                   <div className="text-right">

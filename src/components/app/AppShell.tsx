@@ -15,6 +15,8 @@ import {
   Menu,
   X,
   FileSpreadsheet,
+  CheckCircle2,
+  History,
 } from "lucide-react";
 import { useData } from "@/lib/store";
 import { exportToExcel } from "@/lib/excel";
@@ -27,7 +29,9 @@ const NAV_WORKFLOW = [
   { title: "Purchase & Inward", url: "/purchases", icon: ShoppingCart },
   { title: "Issue & Return", url: "/ledger", icon: ArrowLeftRight },
   { title: "BOQ & Closure", url: "/boq", icon: ClipboardCheck },
-  { title: "Main Store Stock", url: "/stock", icon: Warehouse },
+  { title: "Completed Projects", url: "/completed", icon: CheckCircle2 },
+  { title: "Recent Activities", url: "/activity", icon: History },
+  { title: "Store Stock (ACR Office)", url: "/stock", icon: Warehouse },
 ] as const;
 
 const NAV_ADMIN = [

@@ -1,5 +1,8 @@
 import { useParams, Link } from "react-router-dom";
-import { Printer, ArrowLeft, Snowflake, CheckSquare } from "lucide-react";
+import { useState } from "react";
+import { Printer, ArrowLeft, Snowflake, CheckSquare, Copy, FileSpreadsheet, Check } from "lucide-react";
+import { toast } from "sonner";
+import * as XLSX from "xlsx";
 import { useData } from "@/lib/store";
 import { boqReconciliation } from "@/lib/calc";
 import { formatDate, formatQty } from "@/lib/format";
@@ -8,6 +11,7 @@ import { Button } from "@/components/ui/button";
 export function PrintBoqFsr() {
   const { id } = useParams<{ id: string }>();
   const data = useData();
+  const [copied, setCopied] = useState(false);
 
   const site = data.sites.find((s) => s.id === id);
 
@@ -24,6 +28,61 @@ export function PrintBoqFsr() {
 
   const boqRows = boqReconciliation(site, data);
 
+  const copyToExcelClipboard = () => {
+    const headers = [
+      "Sl No",
+      "Item Code",
+      "Material Name",
+      "Specification",
+      "Planned BOQ",
+      "Running BOQ (Extra)",
+      "Issued",
+      "Returned",
+      "Net Consumed",
+      "Unit",
+    ];
+
+    const rows = boqRows.map((r, idx) => [
+      idx + 1,
+      r.material.code,
+      r.material.name,
+      r.size ? `Size: ${r.size}` : r.material.spec,
+      r.estimatedQty,
+      r.runningBoq,
+      r.totalIssued,
+      r.totalReturned,
+      r.netConsumed,
+      r.unit || r.material.issueUnit,
+    ]);
+
+    const tsv = [headers.join("\t"), ...rows.map((r) => r.join("\t"))].join("\n");
+    navigator.clipboard.writeText(tsv);
+    setCopied(true);
+    toast.success("BOQ reconciliation copied! You can paste directly into Excel (Ctrl+V).");
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const exportExcel = () => {
+    const rows = boqRows.map((r, idx) => ({
+      "Sl No": idx + 1,
+      "Item Code": r.material.code,
+      "Material Name": r.material.name,
+      Specification: r.size ? `Size: ${r.size}` : r.material.spec,
+      "Planned BOQ": r.estimatedQty,
+      "Running BOQ (Extra)": r.runningBoq,
+      Issued: r.totalIssued,
+      Returned: r.totalReturned,
+      "Net Consumed": r.netConsumed,
+      Unit: r.unit || r.material.issueUnit,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "FSR BOQ Reconciliation");
+    XLSX.writeFile(wb, `FSR_BOQ_${site.code}_${site.clientName.replace(/\s+/g, "_")}.xlsx`);
+    toast.success("Excel file downloaded!");
+  };
+
   const checklistItems = [
     "Refrigerant copper piping pressure tested with dry Nitrogen at 350-400 PSI for 24 hours.",
     "Nitrile rubber insulation joints sealed with adhesive and wrapped with 50mm vapor barrier tape.",
@@ -37,16 +96,35 @@ export function PrintBoqFsr() {
 
   return (
     <div className="min-h-screen bg-zinc-100 p-4 sm:p-8 print:bg-white print:p-0">
-      {/* Top Floating Bar */}
-      <div className="no-print mx-auto max-w-4xl mb-6 flex items-center justify-between rounded-lg bg-card p-4 border shadow-sm">
+      {/* Top Action Bar */}
+      <div className="no-print mx-auto max-w-4xl mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg bg-card p-4 border shadow-sm">
         <Button asChild variant="ghost" size="sm">
           <Link to={`/boq?site=${site.id}`}>
             <ArrowLeft className="size-4 mr-1" /> Back to BOQ Tracker
           </Link>
         </Button>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-2">A4 FSR & Final BOQ Document</span>
-          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyToExcelClipboard}
+            className="gap-1.5 text-xs font-semibold"
+          >
+            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-copper" />}
+            <span>{copied ? "Copied for Excel!" : "Copy Table to Excel"}</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportExcel}
+            className="gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+          >
+            <FileSpreadsheet className="size-3.5 text-emerald-600" />
+            <span>Export Excel (.xlsx)</span>
+          </Button>
+
+          <Button variant="copper" size="sm" onClick={() => window.print()} className="gap-1.5 text-xs font-bold">
             <Printer className="size-4" /> Print Field Service Report
           </Button>
         </div>

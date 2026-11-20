@@ -84,11 +84,39 @@ export function MastersPage() {
     if (!matForm.name?.trim()) return void toast.error("Material name is required");
     if (!matForm.code?.trim()) return void toast.error("Material code is required");
 
+    // If the user typed a vendor name that is not an ID, create the vendor on the fly
+    let resolvedVendorId = matForm.defaultVendorId || "";
+    const typedVendorName = (matForm as any)._newVendorName?.trim();
+    if (typedVendorName) {
+      // Check if vendor already exists (by name, case-insensitive)
+      const existing = data.vendors.find(
+        (v) => v.name.toLowerCase() === typedVendorName.toLowerCase(),
+      );
+      if (existing) {
+        resolvedVendorId = existing.id;
+      } else {
+        // Auto-create new vendor
+        const newVenId = uid("ven");
+        const newVen: Vendor = {
+          id: newVenId,
+          name: typedVendorName,
+          category: "",
+          contactPerson: "",
+          phone: "",
+          gstin: "",
+          address: "",
+        };
+        updateData((d) => ({ ...d, vendors: [...d.vendors, newVen] }));
+        resolvedVendorId = newVenId;
+        toast.info(`New vendor "${typedVendorName}" created automatically`);
+      }
+    }
+
     if (editingMat) {
       updateData((d) => ({
         ...d,
         materials: d.materials.map((m) =>
-          m.id === editingMat.id ? ({ ...m, ...matForm } as Material) : m,
+          m.id === editingMat.id ? ({ ...m, ...matForm, defaultVendorId: resolvedVendorId } as Material) : m,
         ),
       }));
       toast.success("Material updated");
@@ -102,7 +130,7 @@ export function MastersPage() {
         spec: matForm.spec || "",
         purchaseUnit: matForm.purchaseUnit || "Nos",
         issueUnit: matForm.issueUnit || "Nos",
-        defaultVendorId: matForm.defaultVendorId || "",
+        defaultVendorId: resolvedVendorId,
         notes: matForm.notes || "",
         rare: Boolean(matForm.rare),
         customSize: Boolean(matForm.customSize),
@@ -611,19 +639,44 @@ export function MastersPage() {
               />
             </Field>
 
-            <Field label="Default Vendor">
-              <select
-                value={matForm.defaultVendorId || ""}
-                onChange={(e) => setMatForm({ ...matForm, defaultVendorId: e.target.value })}
-                className="h-10 w-full rounded-md border border-input bg-card px-3 text-xs"
-              >
-                <option value="">None</option>
-                {data.vendors.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
+            <Field label="Default Vendor (type name or pick from list — new vendors are created automatically)">
+              <div className="relative">
+                <input
+                  list="vendor-datalist"
+                  value={
+                    // Show the vendor name: if it's an ID, look up the name; if already a free-form name, show it
+                    data.vendors.find((v) => v.id === matForm.defaultVendorId)?.name ||
+                    (matForm as any)._newVendorName ||
+                    matForm.defaultVendorId ||
+                    ""
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    // Try to match to existing vendor by name
+                    const matched = data.vendors.find(
+                      (v) => v.name.toLowerCase() === val.toLowerCase(),
+                    );
+                    if (matched) {
+                      setMatForm({ ...matForm, defaultVendorId: matched.id, _newVendorName: undefined } as any);
+                    } else {
+                      // Store free-form name for auto-creation on save
+                      setMatForm({ ...matForm, defaultVendorId: "", _newVendorName: val } as any);
+                    }
+                  }}
+                  placeholder="Type vendor name or select from list…"
+                  className="h-10 w-full rounded-md border border-input bg-card px-3 text-xs focus:outline-none focus:ring-2 focus:ring-copper"
+                />
+                <datalist id="vendor-datalist">
+                  {data.vendors.map((v) => (
+                    <option key={v.id} value={v.name} />
+                  ))}
+                </datalist>
+                {(matForm as any)._newVendorName && (
+                  <p className="mt-1 text-[11px] text-amber-700 font-semibold">
+                    ✦ "{(matForm as any)._newVendorName}" will be created as a new vendor on save.
+                  </p>
+                )}
+              </div>
             </Field>
 
             <Field label="Min Stock Alert Threshold">

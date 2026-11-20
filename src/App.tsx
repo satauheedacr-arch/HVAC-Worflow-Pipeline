@@ -9,6 +9,8 @@ import { BoqPage } from "@/pages/BoqPage";
 import { StockPage } from "@/pages/StockPage";
 import { MastersPage } from "@/pages/MastersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { ActivityPage } from "@/pages/ActivityPage";
+import { CompletedSitesPage } from "@/pages/CompletedSitesPage";
 import { PrintGatePass } from "@/pages/print/PrintGatePass";
 import { PrintReturnSlip } from "@/pages/print/PrintReturnSlip";
 import { PrintBoqFsr } from "@/pages/print/PrintBoqFsr";
@@ -19,11 +21,15 @@ export function App() {
     <>
       <Toaster position="top-right" richColors closeButton />
       <Routes>
-        {/* Printable views (No AppShell) */}
+        {/* Printable / Viewable document views (clean standalone layout with Copy to Excel + Print) */}
         <Route path="/print/issue/:id" element={<PrintGatePass />} />
+        <Route path="/view/issue/:id" element={<PrintGatePass />} />
         <Route path="/print/return/:id" element={<PrintReturnSlip />} />
+        <Route path="/view/return/:id" element={<PrintReturnSlip />} />
         <Route path="/print/boq/:id" element={<PrintBoqFsr />} />
+        <Route path="/view/boq/:id" element={<PrintBoqFsr />} />
         <Route path="/print/purchase/:id" element={<PrintPurchase />} />
+        <Route path="/view/purchase/:id" element={<PrintPurchase />} />
 
         {/* Core application routes wrapped in AppShell */}
         <Route
@@ -63,6 +69,22 @@ export function App() {
           element={
             <AppShell>
               <BoqPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/completed"
+          element={
+            <AppShell>
+              <CompletedSitesPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/activity"
+          element={
+            <AppShell>
+              <ActivityPage />
             </AppShell>
           }
         />

@@ -14,12 +14,12 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="no-print mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div>
+    <div className="no-print mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-[1.75rem]">{title}</h1>
         {description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2.5 shrink-0">{actions}</div>}
     </div>
   );
 }
@@ -52,16 +52,20 @@ export function Field({
 }
 
 const STATUS_VARIANT: Record<ProjectStatus, "info" | "warning" | "copper" | "success" | "muted"> = {
-  "New Site / PO Received": "muted",
-  "Quotation In Progress": "muted",
-  "Gone for Inspection": "muted",
-  "Quotation Sent": "info",
-  "Confirmed": "info",
-  "Work Under Progress": "warning",
-  "Material at Site": "warning",
+  "New Enquiry": "muted",
+  "Site Assigned": "muted",
+  "Site Inspection": "muted",
+  "BOQ (Ready)": "info",
+  "Quotation in Progress": "muted",
+  "Qtn Sent / Submitted": "info",
+  "Order Confirmed / PO Received": "info",
+  "Material Order Completed": "warning",
+  "Material Issued": "warning",
+  "WIP (Work in Progress)": "warning",
   "Work Completed": "copper",
-  "FSR & Handover": "copper",
-  "Tax Invoiced": "success",
+  "FSR Signed & Handing Over Submitted": "copper",
+  "Tax Invoice Raised": "success",
+  "Payment Received / Closed": "success",
 };
 
 export function StatusBadge({ status }: { status: ProjectStatus }) {

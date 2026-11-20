@@ -17,17 +17,17 @@ export function storeStock(data: AppData): Map<string, number> {
     if (p.isIndent) continue; // Indents are price enquiries, not stock received
 
     if (p.allocation === "single" || (p.allocation as string) === "bulk") {
-      // If allocated to main store or no site specified
-      if (!p.siteId || p.siteId === "main-store") {
+      // If allocated to ACR Office or no site specified
+      if (!p.siteId || p.siteId === "main-store" || p.siteId === "acr-office") {
         for (const item of p.items) {
           const cur = stock.get(item.materialId) ?? 0;
           stock.set(item.materialId, cur + (Number(item.qty) || 0));
         }
       }
     } else if (p.allocation === "multi") {
-      // For multi-site purchases, items assigned to main store or without a specific site go to Main Store
+      // For multi-site purchases, items assigned to ACR Office or without a specific site go to ACR Office
       for (const item of p.items) {
-        if (!item.siteId || item.siteId === "main-store") {
+        if (!item.siteId || item.siteId === "main-store" || item.siteId === "acr-office") {
           const cur = stock.get(item.materialId) ?? 0;
           stock.set(item.materialId, cur + (Number(item.qty) || 0));
         }
@@ -61,7 +61,7 @@ export function storeStock(data: AppData): Map<string, number> {
 export function atSiteQty(data: AppData, siteId: string): Map<string, number> {
   const map = new Map<string, number>();
 
-  if (!siteId || siteId === "main-store") return map;
+  if (!siteId || siteId === "main-store" || siteId === "acr-office") return map;
 
   // 1. Purchases delivered straight to this site
   for (const p of data.purchases) {
@@ -161,7 +161,6 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
       material: m,
       size: item.size,
       est: Number(item.qty) || 0,
-      running: Number(item.qty) || 0,
       issued: 0,
       ret: 0,
       unit: item.unit || m.issueUnit,
@@ -249,14 +248,22 @@ export function boqReconciliation(site: Site, data: AppData): BoqRow[] {
     }
   }
 
-  return Array.from(rowsMap.values()).map((r) => ({
-    material: r.material,
-    size: r.size,
-    estimatedQty: r.est,
-    runningBoq: r.running !== undefined ? r.running : r.est,
-    totalIssued: r.issued,
-    totalReturned: r.ret,
-    netConsumed: r.issued - r.ret,
-    unit: r.unit || r.material.issueUnit,
-  }));
+  return Array.from(rowsMap.values()).map((r) => {
+    const netConsumed = r.issued - r.ret;
+    // Running BOQ represents extra/additional material beyond estimated BOQ taken on 2nd visit
+    // If net consumed is within estimated BOQ, Running BOQ is 0. If extra taken, it shows the delta.
+    const calculatedRunning = netConsumed > r.est ? netConsumed - r.est : 0;
+    const finalRunning = r.running !== undefined ? r.running : calculatedRunning;
+
+    return {
+      material: r.material,
+      size: r.size,
+      estimatedQty: r.est,
+      runningBoq: finalRunning,
+      totalIssued: r.issued,
+      totalReturned: r.ret,
+      netConsumed,
+      unit: r.unit || r.material.issueUnit,
+    };
+  });
 }
