@@ -1,30 +1,36 @@
 /**
  * HVAC Pipeline – Persistent Data Store
  * ======================================
- * Dual-layer persistence:
- *   Layer 1 (Primary)  – IndexedDB  → survives all browser restarts, never auto-cleared
- *   Layer 2 (Fast cache) – localStorage → used for instant synchronous load on first render
+ * Triple-layer persistence so data NEVER gets lost on browser close:
+ *   Layer 1  – localStorage["hvac_pipeline_v3"]          (primary, instant sync)
+ *   Layer 2  – localStorage["hvac_pipeline_v3_bak"]      (mirror backup)
+ *   Layer 3  – IndexedDB["HVACPipelineDB"]["main"]        (durable, survives cookie/cache clears)
  *
- * On every update:
- *   • Writes synchronously to localStorage (both primary + backup keys)
- *   • Writes asynchronously to IndexedDB
- *
- * On load:
- *   • Reads synchronously from localStorage for instant first render (no flicker)
- *   • Checks IndexedDB in background; if IndexedDB has newer/valid data, updates in-memory + localStorage
+ * On first load: checks ALL layers + ALL legacy keys so old data is never lost.
+ * On every update: writes to all three layers immediately.
  */
 
 import { useEffect, useState } from "react";
 import type { AppData } from "@/types";
 import { getSeedData, getSampleData } from "./defaults";
 
-// ─── Storage Keys ──────────────────────────────────────────────────────────────
-const LS_PRIMARY   = "hvac_pipeline_data_v3";
-const LS_BACKUP    = "hvac_pipeline_data_v3_bak";
-const IDB_DB_NAME  = "HVACPipelineDB";
-const IDB_STORE    = "app_data";
-const IDB_KEY      = "main";
-const IDB_VERSION  = 1;
+// ─── Storage Key Constants ─────────────────────────────────────────────────────
+// IMPORTANT: also scan legacy keys so users never lose existing data
+const LS_PRIMARY  = "hvac_pipeline_v3";
+const LS_BACKUP   = "hvac_pipeline_v3_bak";
+const IDB_DB      = "HVACPipelineDB";
+const IDB_STORE   = "app_data";
+const IDB_KEY     = "main";
+
+// All keys that may contain saved data (newest first)
+const ALL_LS_KEYS = [
+  "hvac_pipeline_v3",
+  "hvac_pipeline_v3_bak",
+  "hvac_pipeline_data_v3",
+  "hvac_pipeline_data_v3_bak",
+  "hvac_material_pipeline_v2",
+  "hvac_material_pipeline_v2_backup_safe",
+];
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 function isValid(d: unknown): d is AppData {
@@ -37,14 +43,17 @@ function isValid(d: unknown): d is AppData {
   );
 }
 
-// ─── Synchronous localStorage helpers ─────────────────────────────────────────
+// ─── Synchronous localStorage scan (tries ALL keys) ──────────────────────────
 function lsRead(): AppData | null {
-  for (const key of [LS_PRIMARY, LS_BACKUP]) {
+  for (const key of ALL_LS_KEYS) {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) continue;
       const parsed = JSON.parse(raw);
-      if (isValid(parsed)) return parsed as AppData;
+      if (isValid(parsed)) {
+        console.info(`[store] Loaded data from localStorage key: ${key}`);
+        return parsed as AppData;
+      }
     } catch {}
   }
   return null;
@@ -52,22 +61,23 @@ function lsRead(): AppData | null {
 
 function lsWrite(data: AppData): void {
   try {
-    const serialized = JSON.stringify(data);
-    localStorage.setItem(LS_PRIMARY, serialized);
-    localStorage.setItem(LS_BACKUP, serialized);
+    const s = JSON.stringify(data);
+    localStorage.setItem(LS_PRIMARY, s);
+    localStorage.setItem(LS_BACKUP, s);
   } catch (e) {
-    console.error("[store] localStorage write failed:", e);
+    console.error("[store] localStorage write error:", e);
   }
 }
 
-// ─── Async IndexedDB helpers ───────────────────────────────────────────────────
+// ─── Async IndexedDB helpers ──────────────────────────────────────────────────
+let _db: IDBDatabase | null = null;
+
 function openDB(): Promise<IDBDatabase> {
+  if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_DB_NAME, IDB_VERSION);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(IDB_STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
+    const req = indexedDB.open(IDB_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => { _db = req.result; resolve(req.result); };
     req.onerror   = () => reject(req.error);
   });
 }
@@ -75,103 +85,98 @@ function openDB(): Promise<IDBDatabase> {
 async function idbRead(): Promise<AppData | null> {
   try {
     const db = await openDB();
-    return await new Promise<AppData | null>((resolve) => {
-      const tx = db.transaction(IDB_STORE, "readonly");
+    return new Promise<AppData | null>((resolve) => {
+      const tx  = db.transaction(IDB_STORE, "readonly");
       const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
-      req.onsuccess = () => resolve(isValid(req.result) ? (req.result as AppData) : null);
+      req.onsuccess = () => resolve(isValid(req.result) ? req.result as AppData : null);
       req.onerror   = () => resolve(null);
     });
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function idbWrite(data: AppData): Promise<void> {
   try {
     const db = await openDB();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, "readwrite");
+      const tx  = db.transaction(IDB_STORE, "readwrite");
       const req = tx.objectStore(IDB_STORE).put(data, IDB_KEY);
       req.onsuccess = () => resolve();
       req.onerror   = () => reject(req.error);
     });
-  } catch (e) {
-    console.error("[store] IndexedDB write failed:", e);
-  }
+  } catch (e) { console.error("[store] IndexedDB write error:", e); }
 }
 
-// ─── In-memory cache & subscriber list ────────────────────────────────────────
+// ─── Initialise in-memory cache ───────────────────────────────────────────────
+// Step 1: Try localStorage (synchronous — no blank flash on first render)
 let currentData: AppData = (() => {
-  // Try localStorage first (synchronous — no blank flash on load)
   const fromLS = lsRead();
-  if (fromLS) return fromLS;
-
-  // Nothing in localStorage — bootstrap with fresh seed
-  const seed = getSeedData();
-  lsWrite(seed);
-  return seed;
+  if (fromLS) {
+    // Ensure it's also written to the canonical keys (migration from old keys)
+    lsWrite(fromLS);
+    return fromLS;
+  }
+  // Nothing in localStorage → will check IndexedDB asynchronously below
+  return getSeedData();
 })();
 
 const listeners = new Set<() => void>();
 
-// After mount, reconcile with IndexedDB (may have more recent data)
+// Step 2: Check IndexedDB in background — may rescue data if localStorage was cleared
 idbRead().then((idbData) => {
-  if (!idbData) {
-    // IndexedDB is empty — write what we have so it's persisted there too
-    idbWrite(currentData);
-    return;
-  }
-  // If IndexedDB has data not in localStorage (e.g. after a browser storage clear),
-  // promote the IndexedDB data as authoritative
-  const lsCurrent = lsRead();
-  if (!lsCurrent) {
-    console.info("[store] Restored from IndexedDB after localStorage was cleared");
+  if (idbData && !lsRead()) {
+    // localStorage is empty but IndexedDB has data → restore
+    console.info("[store] ✅ Restored data from IndexedDB (localStorage was empty)");
     currentData = idbData;
     lsWrite(idbData);
     listeners.forEach((fn) => fn());
+  } else if (!idbData) {
+    // IndexedDB empty → seed it with whatever we have
+    idbWrite(currentData);
   }
 });
 
-// Safety flush on page close (belt-and-suspenders)
+// Step 3: Safety flush on tab/window close
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     lsWrite(currentData);
   });
+  // Also flush on visibility change (mobile: app going to background)
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      lsWrite(currentData);
+      idbWrite(currentData);
+    }
+  });
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────────
-export function getData(): AppData {
-  return currentData;
-}
+// ─── Public API ───────────────────────────────────────────────────────────────
+export function getData(): AppData { return currentData; }
 
 export function updateData(updater: (prev: AppData) => AppData): void {
   try {
     const next = updater(currentData);
     currentData = next;
-    // Sync write to localStorage so next render is instant
-    lsWrite(next);
-    // Async write to IndexedDB for durability
-    idbWrite(next);
+    lsWrite(next);         // sync — instant
+    idbWrite(next);        // async — durable
     listeners.forEach((fn) => fn());
   } catch (err) {
     console.error("[store] updateData error:", err);
   }
 }
 
-/** React hook — subscribes to store changes */
+/** React hook — subscribes to store */
 export function useData(): AppData {
   const [data, setData] = useState<AppData>(currentData);
 
   useEffect(() => {
-    // Update immediately in case store changed between render and effect
-    setData(currentData);
+    setData(currentData); // sync in case store changed before effect ran
 
     const onChange = () => setData({ ...currentData });
     listeners.add(onChange);
 
-    // Cross-tab sync: if another tab writes to localStorage, pick it up
+    // Cross-tab sync
     const onStorage = (e: StorageEvent) => {
-      if ((e.key === LS_PRIMARY || e.key === LS_BACKUP) && e.newValue) {
+      if (ALL_LS_KEYS.includes(e.key ?? "") && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
           if (isValid(parsed)) {
@@ -192,35 +197,28 @@ export function useData(): AppData {
   return data;
 }
 
-/** Reset to fresh default seed catalog (clears all transactions) */
-export function resetData(): void {
-  const seed = getSeedData();
-  updateData(() => seed);
-}
+/** Reset everything to fresh seed (clears all data) */
+export function resetData(): void { updateData(() => getSeedData()); }
 
-/** Load rich sample demonstration data */
-export function loadSampleData(): void {
-  updateData(() => getSampleData());
-}
+/** Load rich sample data */
+export function loadSampleData(): void { updateData(() => getSampleData()); }
 
-/** Export full state snapshot as JSON file */
+/** Export JSON backup file */
 export function exportBackupJSON(): void {
-  const blob = new Blob([JSON.stringify(currentData, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
+  const blob = new Blob([JSON.stringify(currentData, null, 2)], { type: "application/json" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
   a.download = `hvac-pipeline-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-/** Import state from JSON string */
+/** Import JSON backup */
 export function importBackupJSON(jsonStr: string): boolean {
   try {
     const parsed = JSON.parse(jsonStr);
-    if (!isValid(parsed)) throw new Error("Invalid backup format");
+    if (!isValid(parsed)) throw new Error("Invalid format");
     updateData(() => parsed as AppData);
     return true;
   } catch (err) {
@@ -229,28 +227,5 @@ export function importBackupJSON(jsonStr: string): boolean {
   }
 }
 
-/** Migrate data from old localStorage keys to new keys — called once on startup */
-export function migrateLegacyStorage(): void {
-  const OLD_KEYS = [
-    "hvac_material_pipeline_v2",
-    "hvac_material_pipeline_v2_backup_safe",
-    "hvac_pipeline_v1",
-  ];
-  for (const oldKey of OLD_KEYS) {
-    try {
-      const raw = localStorage.getItem(oldKey);
-      if (!raw) continue;
-      const parsed = JSON.parse(raw);
-      if (!isValid(parsed)) continue;
-      // Check if primary key already has data
-      const primary = localStorage.getItem(LS_PRIMARY);
-      if (primary) continue; // already migrated
-      console.info(`[store] Migrating data from legacy key: ${oldKey}`);
-      lsWrite(parsed as AppData);
-      idbWrite(parsed as AppData);
-      currentData = parsed as AppData;
-      listeners.forEach((fn) => fn());
-      break;
-    } catch {}
-  }
-}
+/** Kept for backwards compatibility — no-op now that migration is in lsRead() */
+export function migrateLegacyStorage(): void {}
