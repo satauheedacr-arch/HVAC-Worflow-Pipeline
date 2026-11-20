@@ -18,6 +18,7 @@ import { getSeedData, getSampleData } from "./defaults";
 // IMPORTANT: also scan legacy keys so users never lose existing data
 const LS_PRIMARY  = "hvac_pipeline_v3";
 const LS_BACKUP   = "hvac_pipeline_v3_bak";
+const SS_KEY      = "hvac_pipeline_session"; // sessionStorage mirror (last-resort)
 const IDB_DB      = "HVACPipelineDB";
 const IDB_STORE   = "app_data";
 const IDB_KEY     = "main";
@@ -56,6 +57,17 @@ function lsRead(): AppData | null {
       }
     } catch {}
   }
+  // Last resort: check sessionStorage
+  try {
+    const raw = sessionStorage.getItem("hvac_pipeline_session");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (isValid(parsed)) {
+        console.info("[store] Restored from sessionStorage");
+        return parsed as AppData;
+      }
+    }
+  } catch {}
   return null;
 }
 
@@ -64,6 +76,8 @@ function lsWrite(data: AppData): void {
     const s = JSON.stringify(data);
     localStorage.setItem(LS_PRIMARY, s);
     localStorage.setItem(LS_BACKUP, s);
+    // Mirror to sessionStorage as a last-resort in-session safety copy
+    try { sessionStorage.setItem("hvac_pipeline_session", s); } catch {}
   } catch (e) {
     console.error("[store] localStorage write error:", e);
   }
